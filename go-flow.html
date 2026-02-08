@@ -49,9 +49,9 @@ canvas { max-width:100%; max-height:100%; }
   <div id="bot-selector" style="margin-bottom:15px;">
     <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Opponent:</label>
     <select id="bot-select" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
-      <option value="amybot-beginner">Amy Bot Beginner (~25k) - Basic</option>
+      <option value="amybot-beginner" selected>Amy Bot Beginner (~25k) - Basic</option>
       <option value="amybot-ddk">Amy Bot DDK (~15k) - Solid</option>
-      <option value="amybot-sdk" selected>Amy Bot SDK (~5k) - Tactical</option>
+      <option value="amybot-sdk">Amy Bot SDK (~5k) - Tactical</option>
       <option value="nightly-katago">NightlyKataGo (Very Strong) - Fighting</option>
       <option value="kata-bot">KataGo (Strong) - Modern</option>
     </select>
@@ -60,7 +60,7 @@ canvas { max-width:100%; max-height:100%; }
     <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Board Size:</label>
     <select id="board-size" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
       <option value="9">9x9</option>
-      <option value="13">13x13</option>
+      <option value="13" selected>13x13</option>
       <option value="19">19x19</option>
     </select>
   </div>
@@ -68,7 +68,7 @@ canvas { max-width:100%; max-height:100%; }
     <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Your Color:</label>
     <select id="player-color" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
       <option value="black">Black</option>
-      <option value="white">White</option>
+      <option value="white" selected>White</option>
     </select>
   </div>
   <div id="theme-selector" style="margin-bottom:15px;">
@@ -338,11 +338,23 @@ async function challengeBot() {
     const selectedColor = document.getElementById('player-color').value;
     botGame.theme = document.getElementById('board-theme').value;
 
+    console.log('Challenge settings:', {
+      bot: selectedBot,
+      boardSize: botGame.boardSize,
+      color: selectedColor,
+      theme: botGame.theme
+    });
+
     // Initialize landscape theme resources if selected
     if (botGame.theme === 'landscape') {
       botGame.gameSeed = Date.now();
       botGame.noise = new Noise(botGame.gameSeed);
       initInkField(botGame.boardSize);
+      console.log('Landscape theme initialized:', {
+        seed: botGame.gameSeed,
+        hasNoise: !!botGame.noise,
+        hasInkField: !!botGame.inkField
+      });
     }
 
     const challenge = {
@@ -579,6 +591,7 @@ function updateTurnInfo() {
 
 // Main draw dispatcher
 function drawBotBoard() {
+  console.log('drawBotBoard called, theme:', botGame.theme, 'noise:', !!botGame.noise, 'inkField:', !!botGame.inkField);
   if (botGame.theme === 'landscape') {
     drawBotBoardLandscape();
   } else {
@@ -707,6 +720,15 @@ function drawBotBoardClassic() {
 
 // Landscape theme rendering
 function drawBotBoardLandscape() {
+  console.log('drawBotBoardLandscape called');
+
+  // Check if landscape resources are initialized
+  if (!botGame.noise || !botGame.inkField) {
+    console.error('Landscape theme not properly initialized! Falling back to classic.');
+    drawBotBoardClassic();
+    return;
+  }
+
   const canvas = document.getElementById('canvas-bot');
   const ctx = canvas.getContext('2d');
   const container = document.getElementById('board-container-bot');
@@ -725,6 +747,7 @@ function drawBotBoardLandscape() {
   const m = cs;
 
   // Render landscape background
+  console.log('Rendering landscape, displaySize:', displaySize);
   renderLandscape(ctx, displaySize);
 
   // Grid lines
@@ -817,27 +840,27 @@ function drawBotBoardLandscape() {
 function landscapeColor(noiseVal, inkVal) {
   const base = noiseVal * 0.5 + 0.5; // 0..1
 
-  // Warm wood palette
-  const r0 = 180, g0 = 148, b0 = 110; // light wood
-  const r1 = 140, g1 = 108, b1 = 72;  // dark wood grain
+  // Warm wood palette - increased contrast
+  const r0 = 200, g0 = 165, b0 = 120; // lighter wood
+  const r1 = 120, g1 = 90, b1 = 60;   // darker wood grain
 
   let t = base;
   let r = r0 + (r1 - r0) * t;
   let g = g0 + (g1 - g0) * t;
   let b = b0 + (b1 - b0) * t;
 
-  // Ink influence
+  // Ink influence - increased intensity
   const ink = Math.max(-1, Math.min(1, inkVal));
   if (ink > 0) {
-    // Black stone ink: darker
+    // Black stone ink: much darker
+    r -= ink * 60;
+    g -= ink * 55;
+    b -= ink * 45;
+  } else {
+    // White stone ink: much lighter
     r -= ink * 45;
     g -= ink * 40;
     b -= ink * 30;
-  } else {
-    // White stone ink: lighter
-    r -= ink * 30;
-    g -= ink * 28;
-    b -= ink * 20;
   }
 
   return [
@@ -848,17 +871,19 @@ function landscapeColor(noiseVal, inkVal) {
 }
 
 function renderLandscape(ctx, displaySize) {
+  console.log('renderLandscape called, displaySize:', displaySize);
   const imageData = ctx.createImageData(displaySize, displaySize);
   const data = imageData.data;
 
   for (let py = 0; py < displaySize; py++) {
     for (let px = 0; px < displaySize; px++) {
-      const nx = px / displaySize * 4;
-      const ny = py / displaySize * 4;
+      // Increased frequency for more visible grain (was * 4, now * 6)
+      const nx = px / displaySize * 6;
+      const ny = py / displaySize * 6;
 
-      // Layered noise for complex grain
-      const n1 = botGame.noise.octaves(nx, ny, 5, 0.55);
-      const n2 = botGame.noise.octaves(nx * 2.2 + 100, ny * 0.8 + 100, 3, 0.5) * 0.3;
+      // Layered noise for complex grain - increased octaves for more detail
+      const n1 = botGame.noise.octaves(nx, ny, 6, 0.55);
+      const n2 = botGame.noise.octaves(nx * 2.2 + 100, ny * 0.8 + 100, 4, 0.5) * 0.4;
       const noiseVal = n1 + n2;
 
       // Sample ink field with bilinear interpolation

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Landscape Theme Test</title>
+<style>
+body { margin: 0; padding: 20px; background: #1a1210; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+canvas { border: 2px solid #444; }
+</style>
+</head>
+<body>
+<canvas id="test" width="400" height="400"></canvas>
+<script>
+// Noise class
+class Noise {
+  constructor(seed) {
+    this.p = new Uint8Array(512);
+    let s = seed | 0;
+    for (let i = 0; i < 256; i++) {
+      s = (s * 16807 + 7) & 0x7fffffff;
+      this.p[i] = s & 255;
+    }
+    for (let i = 0; i < 256; i++) this.p[i + 256] = this.p[i];
+  }
+  fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+  lerp(a, b, t) { return a + t * (b - a); }
+  grad(h, x, y) {
+    const g = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+    const v = g[h & 7];
+    return v[0] * x + v[1] * y;
+  }
+  get(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = this.fade(xf), v = this.fade(yf);
+    const p = this.p;
+    const a = p[X] + Y, b = p[X + 1] + Y;
+    return this.lerp(
+      this.lerp(this.grad(p[a], xf, yf), this.grad(p[b], xf - 1, yf), u),
+      this.lerp(this.grad(p[a + 1], xf, yf - 1), this.grad(p[b + 1], xf - 1, yf - 1), u),
+      v
+    );
+  }
+  octaves(x, y, n, persistence) {
+    let val = 0, amp = 1, freq = 1, max = 0;
+    for (let i = 0; i < n; i++) {
+      val += this.get(x * freq, y * freq) * amp;
+      max += amp;
+      amp *= persistence;
+      freq *= 2;
+    }
+    return val / max;
+  }
+}
+
+const canvas = document.getElementById('test');
+const ctx = canvas.getContext('2d');
+const noise = new Noise(Date.now());
+
+function landscapeColor(noiseVal) {
+  const base = noiseVal * 0.5 + 0.5;
+  const r0 = 200, g0 = 165, b0 = 120;
+  const r1 = 120, g1 = 90, b1 = 60;
+
+  let r = r0 + (r1 - r0) * base;
+  let g = g0 + (g1 - g0) * base;
+  let b = b0 + (b1 - b0) * base;
+
+  return [Math.round(r), Math.round(g), Math.round(b)];
+}
+
+// Render test
+const imageData = ctx.createImageData(400, 400);
+const data = imageData.data;
+
+for (let py = 0; py < 400; py++) {
+  for (let px = 0; px < 400; px++) {
+    const nx = px / 400 * 6;
+    const ny = py / 400 * 6;
+
+    const n1 = noise.octaves(nx, ny, 6, 0.55);
+    const n2 = noise.octaves(nx * 2.2 + 100, ny * 0.8 + 100, 4, 0.5) * 0.4;
+    const noiseVal = n1 + n2;
+
+    const [r, g, b] = landscapeColor(noiseVal);
+    const i = (py * 400 + px) * 4;
+    data[i] = r;
+    data[i + 1] = g;
+    data[i + 2] = b;
+    data[i + 3] = 255;
+  }
+}
+
+ctx.putImageData(imageData, 0, 0);
+console.log('Test landscape rendered!');
+</script>
+</body>
+</html>
