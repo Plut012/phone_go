@@ -80,6 +80,21 @@ def serve_html():
     """Serve the go-flow.html file"""
     return send_file('go-flow.html')
 
+@app.route('/manifest.json')
+def serve_manifest():
+    """Serve the PWA manifest"""
+    return send_file('manifest.json', mimetype='application/json')
+
+@app.route('/icon-192.png')
+def serve_icon_192():
+    """Serve the 192x192 icon"""
+    return send_file('icon-192.png', mimetype='image/png')
+
+@app.route('/icon-512.png')
+def serve_icon_512():
+    """Serve the 512x512 icon"""
+    return send_file('icon-512.png', mimetype='image/png')
+
 
 # ============================================================================
 # REST API Proxy
