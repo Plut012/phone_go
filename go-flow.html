@@ -445,15 +445,30 @@ function handleGameEvent(event, data) {
     // Game finished with outcome
     if (gameData.phase === 'finished' && gameData.outcome) {
       const outcome = gameData.outcome;
-      let scoreText = 'Game Over\n';
+      let scoreText = 'Game Over';
 
       if (outcome === 'Resignation') {
         scoreText = 'Game Over - Resignation';
       } else if (outcome === 'Timeout') {
         scoreText = 'Game Over - Timeout';
-      } else {
+      } else if (typeof outcome === 'string') {
         // Parse score (format: "B+12.5" or "W+R")
-        scoreText = `Game Over\n${outcome}`;
+        // Extract winner and margin
+        const match = outcome.match(/^([BW])\+(.+)$/);
+        if (match) {
+          const winner = match[1]; // "B" or "W"
+          const margin = match[2];  // "12.5" or "R" (resignation)
+
+          if (margin === 'R') {
+            scoreText = `${winner} wins (Resignation)`;
+          } else if (margin === 'T') {
+            scoreText = `${winner} wins (Timeout)`;
+          } else {
+            scoreText = `${winner} wins by ${margin}`;
+          }
+        } else {
+          scoreText = `Game Over\n${outcome}`;
+        }
       }
 
       setGameInfo(scoreText);
