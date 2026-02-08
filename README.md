@@ -29,15 +29,21 @@ Open `http://localhost:5000` in your browser (Chrome recommended)
 
 ### 4. Play!
 - Click "Play Bot"
+- Choose opponent (Amy Bot SDK recommended for learning)
 - Select board size (9x9, 13x13, or 19x19)
+- Select your color (Black or White)
 - Click "Start Game"
-- Tap the board to place stones
+- Tap board to preview, tap golden bar to submit move
 - Use Pass or Resign buttons as needed
 
 ## Features
 
-- **Play Bot**: Challenge amybot-beginner (25k) on 9x9, 13x13, or 19x19 boards
-- **Pass & Resign**: Proper game control buttons
+- **5 Bot Opponents**: Choose from beginner to advanced (Amy Bots, KataGo, NightlyKataGo)
+- **3 Board Sizes**: 9x9, 13x13, or 19x19
+- **Color Selection**: Play as Black or White
+- **Visual Submit**: Preview move with semi-transparent stone, tap bar to confirm
+- **Pass & Resign**: Full game control
+- **5-Minute Games**: Comfortable thinking time (Fischer: 5min + 30s/move)
 - **Review SGF**: Load and navigate through SGF files
 
 ## How it works
@@ -69,14 +75,19 @@ python proxy.py
 
 Then open `http://localhost:5000` in your browser
 
-## Configuration
+## Available Bots
 
-Edit `go-flow.html` to change:
-- `BOT_ID`: Default is 605979 (amybot-beginner)
-  - 431859: amybot-ddk (~15k)
-  - 424928: amybot-sdk (~5k)
-- Board size (currently 9x9)
-- Time controls (currently Fischer: 120s + 30s/move, max 300s)
+- **Amy Bot Beginner** (~25k) - Basic, always available
+- **Amy Bot DDK** (~15k) - Solid play, always available
+- **Amy Bot SDK** (~5k) - Tactical, always available ⭐ Default
+- **NightlyKataGo** (Very Strong) - Fighting style, usually available
+- **KataGo** (Strong) - Modern AI, intermittent
+
+## Current Settings
+
+- **Time Control**: Fischer (5min + 30s/move, max 10min)
+- **Board Sizes**: 9x9, 13x13, 19x19
+- **Colors**: Black or White (no random)
 
 ## Notes
 

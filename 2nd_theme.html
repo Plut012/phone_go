@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Go</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #1a1714;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Cormorant Garamond', serif;
+    color: #a89880;
+    overflow: hidden;
+  }
+
+  .container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .board-frame {
+    position: relative;
+    padding: 2px;
+    background: linear-gradient(135deg, #3a3228, #2a2420, #3a3228);
+    border-radius: 3px;
+    box-shadow:
+      0 2px 20px rgba(0,0,0,0.5),
+      0 0 60px rgba(40,30,20,0.3),
+      inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+
+  canvas#board {
+    display: block;
+    border-radius: 2px;
+    cursor: crosshair;
+  }
+
+  .info {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    font-size: 14px;
+    font-weight: 300;
+    letter-spacing: 0.08em;
+    opacity: 0.6;
+    user-select: none;
+  }
+
+  .info .turn-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .info .stone-preview {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    transition: background 0.3s ease;
+  }
+
+  .info button {
+    background: none;
+    border: 1px solid rgba(168,152,128,0.2);
+    color: #a89880;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 300;
+    letter-spacing: 0.08em;
+    padding: 6px 16px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .info button:hover {
+    border-color: rgba(168,152,128,0.5);
+    background: rgba(168,152,128,0.05);
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <div class="board-frame">
+    <canvas id="board"></canvas>
+  </div>
+  <div class="info">
+    <div class="turn-indicator">
+      <div class="stone-preview" id="turnStone"></div>
+      <span id="turnLabel">black to play</span>
+    </div>
+    <button onclick="newGame()">new game</button>
+    <button onclick="passMove()">pass</button>
+    <button onclick="undoMove()">undo</button>
+  </div>
+</div>
+
+<script>
+// ── Configuration ──────────────────────────────────────────────
+const BOARD_SIZE = 19;
+const CANVAS_SIZE = Math.min(window.innerWidth - 60, window.innerHeight - 120, 680);
+const MARGIN = Math.round(CANVAS_SIZE * 0.045);
+const CELL = (CANVAS_SIZE - MARGIN * 2) / (BOARD_SIZE - 1);
+const STONE_R = CELL * 0.46;
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+canvas.width = CANVAS_SIZE;
+canvas.height = CANVAS_SIZE;
+
+// ── Simplex-ish Noise (compact) ────────────────────────────────
+class Noise {
+  constructor(seed) {
+    this.p = new Uint8Array(512);
+    let s = seed | 0;
+    for (let i = 0; i < 256; i++) {
+      s = (s * 16807 + 7) & 0x7fffffff;
+      this.p[i] = s & 255;
+    }
+    for (let i = 0; i < 256; i++) this.p[i + 256] = this.p[i];
+  }
+  fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+  lerp(a, b, t) { return a + t * (b - a); }
+  grad(h, x, y) {
+    const g = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+    const v = g[h & 7];
+    return v[0] * x + v[1] * y;
+  }
+  get(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = this.fade(xf), v = this.fade(yf);
+    const p = this.p;
+    const a = p[X] + Y, b = p[X + 1] + Y;
+    return this.lerp(
+      this.lerp(this.grad(p[a], xf, yf), this.grad(p[b], xf - 1, yf), u),
+      this.lerp(this.grad(p[a + 1], xf, yf - 1), this.grad(p[b + 1], xf - 1, yf - 1), u),
+      v
+    );
+  }
+  octaves(x, y, n, persistence) {
+    let val = 0, amp = 1, freq = 1, max = 0;
+    for (let i = 0; i < n; i++) {
+      val += this.get(x * freq, y * freq) * amp;
+      max += amp;
+      amp *= persistence;
+      freq *= 2;
+    }
+    return val / max;
+  }
+}
+
+// ── Ink Field ──────────────────────────────────────────────────
+const INK_RES = 128;
+let inkField = new Float32Array(INK_RES * INK_RES);
+let inkBuffer = new Float32Array(INK_RES * INK_RES);
+
+function dropInk(bx, by, color) {
+  const ix = (bx / (BOARD_SIZE - 1)) * (INK_RES - 1);
+  const iy = (by / (BOARD_SIZE - 1)) * (INK_RES - 1);
+  const radius = INK_RES * 0.08;
+  const intensity = color === 1 ? 0.6 : -0.6;
+
+  for (let y = 0; y < INK_RES; y++) {
+    for (let x = 0; x < INK_RES; x++) {
+      const dx = x - ix, dy = y - iy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < radius) {
+        const falloff = Math.pow(1 - d / radius, 2);
+        inkField[y * INK_RES + x] += intensity * falloff;
+      }
+    }
+  }
+}
+
+function diffuseInk() {
+  for (let i = 0; i < 3; i++) {
+    for (let y = 1; y < INK_RES - 1; y++) {
+      for (let x = 1; x < INK_RES - 1; x++) {
+        const idx = y * INK_RES + x;
+        inkBuffer[idx] = (
+          inkField[idx] * 0.6 +
+          inkField[idx - 1] * 0.1 +
+          inkField[idx + 1] * 0.1 +
+          inkField[(y - 1) * INK_RES + x] * 0.1 +
+          inkField[(y + 1) * INK_RES + x] * 0.1
+        );
+      }
+    }
+    [inkField, inkBuffer] = [inkBuffer, inkField];
+  }
+}
+
+// ── Game State ─────────────────────────────────────────────────
+let board = [];       // 0=empty, 1=black, 2=white
+let turn = 1;         // 1=black, 2=white
+let history = [];     // for undo
+let prevBoardState = null;
+let gameSeed = Date.now();
+let noise = new Noise(gameSeed);
+let consecutivePasses = 0;
+
+function initBoard() {
+  board = new Array(BOARD_SIZE * BOARD_SIZE).fill(0);
+  turn = 1;
+  history = [];
+  prevBoardState = null;
+  consecutivePasses = 0;
+}
+
+function idx(x, y) { return y * BOARD_SIZE + x; }
+
+function neighbors(x, y) {
+  const n = [];
+  if (x > 0) n.push([x - 1, y]);
+  if (x < BOARD_SIZE - 1) n.push([x + 1, y]);
+  if (y > 0) n.push([x, y - 1]);
+  if (y < BOARD_SIZE - 1) n.push([x, y + 1]);
+  return n;
+}
+
+function getGroup(x, y) {
+  const color = board[idx(x, y)];
+  if (!color) return { stones: [], liberties: 0 };
+  const visited = new Set();
+  const stones = [];
+  let liberties = new Set();
+  const stack = [[x, y]];
+
+  while (stack.length) {
+    const [cx, cy] = stack.pop();
+    const key = idx(cx, cy);
+    if (visited.has(key)) continue;
+    visited.add(key);
+    stones.push([cx, cy]);
+
+    for (const [nx, ny] of neighbors(cx, cy)) {
+      const ni = idx(nx, ny);
+      if (board[ni] === 0) liberties.add(ni);
+      else if (board[ni] === color && !visited.has(ni)) stack.push([nx, ny]);
+    }
+  }
+  return { stones, liberties: liberties.size };
+}
+
+function removeGroup(stones) {
+  for (const [x, y] of stones) board[idx(x, y)] = 0;
+}
+
+function boardToString() { return board.join(','); }
+
+function tryPlace(x, y) {
+  if (board[idx(x, y)] !== 0) return false;
+
+  const snapshot = board.slice();
+  board[idx(x, y)] = turn;
+
+  // capture opponent groups with no liberties
+  const opp = turn === 1 ? 2 : 1;
+  let captured = [];
+  for (const [nx, ny] of neighbors(x, y)) {
+    if (board[idx(nx, ny)] === opp) {
+      const g = getGroup(nx, ny);
+      if (g.liberties === 0) {
+        captured.push(...g.stones);
+        removeGroup(g.stones);
+      }
+    }
+  }
+
+  // check self-capture
+  const self = getGroup(x, y);
+  if (self.liberties === 0) {
+    board = snapshot;
+    return false;
+  }
+
+  // simple ko check
+  const newState = boardToString();
+  if (prevBoardState && newState === prevBoardState) {
+    board = snapshot;
+    return false;
+  }
+
+  history.push({ snapshot, prevBoardState, turn, inkSnapshot: inkField.slice() });
+  prevBoardState = boardToString();
+  consecutivePasses = 0;
+
+  // drop ink
+  dropInk(x, y, turn);
+  for (const [cx, cy] of captured) dropInk(cx, cy, turn);
+  diffuseInk();
+
+  turn = opp;
+  return true;
+}
+
+function passMove() {
+  history.push({ snapshot: board.slice(), prevBoardState, turn, inkSnapshot: inkField.slice() });
+  consecutivePasses++;
+  turn = turn === 1 ? 2 : 1;
+  updateUI();
+}
+
+function undoMove() {
+  if (!history.length) return;
+  const prev = history.pop();
+  board = prev.snapshot;
+  prevBoardState = prev.prevBoardState;
+  turn = prev.turn;
+  inkField = prev.inkSnapshot;
+  consecutivePasses = 0;
+  render();
+  updateUI();
+}
+
+// ── Rendering ──────────────────────────────────────────────────
+
+// Base color palette — warm wood tones
+function landscapeColor(noiseVal, inkVal) {
+  // base warmth from noise
+  const base = noiseVal * 0.5 + 0.5; // 0..1
+
+  // warm wood palette
+  const r0 = 180, g0 = 148, b0 = 110; // light wood
+  const r1 = 140, g1 = 108, b1 = 72;  // dark wood grain
+
+  let t = base;
+  let r = r0 + (r1 - r0) * t;
+  let g = g0 + (g1 - g0) * t;
+  let b = b0 + (b1 - b0) * t;
+
+  // ink influence — shifts toward darker/lighter pools
+  const ink = Math.max(-1, Math.min(1, inkVal));
+  if (ink > 0) {
+    // black stone ink: deeper, darker warm
+    r -= ink * 45;
+    g -= ink * 40;
+    b -= ink * 30;
+  } else {
+    // white stone ink: lighter, slightly cooler warm
+    r -= ink * 30;
+    g -= ink * 28;
+    b -= ink * 20;
+  }
+
+  return [Math.round(Math.max(0, Math.min(255, r))),
+          Math.round(Math.max(0, Math.min(255, g))),
+          Math.round(Math.max(0, Math.min(255, b)))];
+}
+
+function renderLandscape() {
+  const imageData = ctx.createImageData(CANVAS_SIZE, CANVAS_SIZE);
+  const data = imageData.data;
+
+  for (let py = 0; py < CANVAS_SIZE; py++) {
+    for (let px = 0; px < CANVAS_SIZE; px++) {
+      const nx = px / CANVAS_SIZE * 4;
+      const ny = py / CANVAS_SIZE * 4;
+
+      // layered noise for complex grain
+      const n1 = noise.octaves(nx, ny, 5, 0.55);
+      const n2 = noise.octaves(nx * 2.2 + 100, ny * 0.8 + 100, 3, 0.5) * 0.3;
+      const noiseVal = n1 + n2;
+
+      // sample ink field with bilinear interpolation
+      const ix = (px / CANVAS_SIZE) * (INK_RES - 1);
+      const iy = (py / CANVAS_SIZE) * (INK_RES - 1);
+      const x0 = Math.floor(ix), y0 = Math.floor(iy);
+      const x1 = Math.min(x0 + 1, INK_RES - 1), y1 = Math.min(y0 + 1, INK_RES - 1);
+      const fx = ix - x0, fy = iy - y0;
+      const inkVal =
+        inkField[y0 * INK_RES + x0] * (1 - fx) * (1 - fy) +
+        inkField[y0 * INK_RES + x1] * fx * (1 - fy) +
+        inkField[y1 * INK_RES + x0] * (1 - fx) * fy +
+        inkField[y1 * INK_RES + x1] * fx * fy;
+
+      const [r, g, b] = landscapeColor(noiseVal, inkVal);
+      const i = (py * CANVAS_SIZE + px) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+function renderGrid() {
+  ctx.strokeStyle = 'rgba(60, 45, 30, 0.35)';
+  ctx.lineWidth = 0.8;
+
+  for (let i = 0; i < BOARD_SIZE; i++) {
+    const pos = MARGIN + i * CELL;
+
+    ctx.beginPath();
+    ctx.moveTo(MARGIN, pos);
+    ctx.lineTo(CANVAS_SIZE - MARGIN, pos);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(pos, MARGIN);
+    ctx.lineTo(pos, CANVAS_SIZE - MARGIN);
+    ctx.stroke();
+  }
+
+  // star points
+  const stars = BOARD_SIZE === 19
+    ? [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]]
+    : BOARD_SIZE === 13
+    ? [[3,3],[3,9],[6,6],[9,3],[9,9]]
+    : [[2,2],[2,6],[4,4],[6,2],[6,6]];
+
+  ctx.fillStyle = 'rgba(60, 45, 30, 0.45)';
+  for (const [x, y] of stars) {
+    ctx.beginPath();
+    ctx.arc(MARGIN + x * CELL, MARGIN + y * CELL, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function renderStones() {
+  for (let y = 0; y < BOARD_SIZE; y++) {
+    for (let x = 0; x < BOARD_SIZE; x++) {
+      const color = board[idx(x, y)];
+      if (!color) continue;
+
+      const cx = MARGIN + x * CELL;
+      const cy = MARGIN + y * CELL;
+
+      // subtle shadow
+      ctx.beginPath();
+      ctx.arc(cx + 1.2, cy + 1.5, STONE_R, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+
+      // stone body
+      const grad = ctx.createRadialGradient(
+        cx - STONE_R * 0.3, cy - STONE_R * 0.3, STONE_R * 0.1,
+        cx, cy, STONE_R
+      );
+
+      if (color === 1) {
+        grad.addColorStop(0, '#4a4540');
+        grad.addColorStop(0.7, '#2a2725');
+        grad.addColorStop(1, '#1a1815');
+      } else {
+        grad.addColorStop(0, '#f5f0e8');
+        grad.addColorStop(0.5, '#e8e0d4');
+        grad.addColorStop(1, '#d8cfc0');
+      }
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, STONE_R, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+  }
+}
+
+function render() {
+  renderLandscape();
+  renderGrid();
+  renderStones();
+}
+
+function updateUI() {
+  const stone = document.getElementById('turnStone');
+  const label = document.getElementById('turnLabel');
+  stone.style.background = turn === 1 ? '#2a2725' : '#e8e0d4';
+  stone.style.border = turn === 1 ? '1px solid #444' : '1px solid #aaa';
+  label.textContent = turn === 1 ? 'black to play' : 'white to play';
+}
+
+// ── Interaction ────────────────────────────────────────────────
+
+let hoverX = -1, hoverY = -1;
+
+canvas.addEventListener('mousemove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const scale = CANVAS_SIZE / rect.width;
+  const mx = (e.clientX - rect.left) * scale;
+  const my = (e.clientY - rect.top) * scale;
+
+  const bx = Math.round((mx - MARGIN) / CELL);
+  const by = Math.round((my - MARGIN) / CELL);
+
+  if (bx >= 0 && bx < BOARD_SIZE && by >= 0 && by < BOARD_SIZE) {
+    if (bx !== hoverX || by !== hoverY) {
+      hoverX = bx;
+      hoverY = by;
+      renderHover();
+    }
+  } else {
+    if (hoverX !== -1) { hoverX = -1; hoverY = -1; render(); }
+  }
+});
+
+canvas.addEventListener('mouseleave', () => {
+  hoverX = -1; hoverY = -1;
+  render();
+});
+
+canvas.addEventListener('click', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const scale = CANVAS_SIZE / rect.width;
+  const mx = (e.clientX - rect.left) * scale;
+  const my = (e.clientY - rect.top) * scale;
+
+  const bx = Math.round((mx - MARGIN) / CELL);
+  const by = Math.round((my - MARGIN) / CELL);
+
+  if (bx >= 0 && bx < BOARD_SIZE && by >= 0 && by < BOARD_SIZE) {
+    if (tryPlace(bx, by)) {
+      render();
+      updateUI();
+    }
+  }
+});
+
+function renderHover() {
+  render();
+  if (hoverX < 0 || board[idx(hoverX, hoverY)] !== 0) return;
+
+  const cx = MARGIN + hoverX * CELL;
+  const cy = MARGIN + hoverY * CELL;
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, STONE_R, 0, Math.PI * 2);
+  ctx.fillStyle = turn === 1 ? 'rgba(30,28,25,0.3)' : 'rgba(240,235,225,0.3)';
+  ctx.fill();
+}
+
+// ── Init ───────────────────────────────────────────────────────
+
+function newGame() {
+  gameSeed = Date.now();
+  noise = new Noise(gameSeed);
+  inkField = new Float32Array(INK_RES * INK_RES);
+  inkBuffer = new Float32Array(INK_RES * INK_RES);
+  initBoard();
+  render();
+  updateUI();
+}
+
+initBoard();
+render();
+updateUI();
+</script>
+</body>
+</html>

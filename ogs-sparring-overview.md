@@ -77,11 +77,15 @@ Receive: 42["game/{id}/move", {"move": [2, 3]}]  // opponent's response
 
 ## Bot IDs (for challenges)
 
-| Bot | ID | Strength |
-|-----|----|----------|
-| amybot-beginner | 605979 | ~25k |
-| amybot-ddk | 431859 | ~15k |
-| amybot-sdk | 424928 | ~5k |
+| Bot | ID | Strength | Availability |
+|-----|----|----------|--------------|
+| amybot-beginner | 605979 | ~25k | Always ✅ |
+| amybot-ddk | 431859 | ~15k | Always ✅ |
+| amybot-sdk | 424928 | ~5k | Always ✅ (Default) |
+| NightlyKataGo | 530672 | Very Strong | Usually ✅ |
+| kata-bot | 592684 | Strong | Intermittent ⚠️ |
+
+**Note**: User-run bots (Leela Zero, etc.) often offline. Stick with Amy bots for reliability.
 
 ## Phone Setup (Termux)
 
@@ -101,6 +105,9 @@ Then open `flow.html` in Chrome. It talks to `localhost:5000`.
 
 ## Status
 
-- [x] UI: flow.html (done)
-- [ ] Proxy: proxy.py (to build)
-- [ ] Integration: connect UI to proxy
+- [x] UI: go-flow.html with bot selection, board sizes, color choice
+- [x] Proxy: proxy.py serving HTML at localhost:5000
+- [x] Integration: WebSocket + REST API fully connected
+- [x] Visual submit: Preview + confirmation bar
+- [x] Time control: 5min Fischer games
+- [x] Multiple bots: Amy series, KataGo, NightlyKataGo

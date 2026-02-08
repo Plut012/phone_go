@@ -52,7 +52,7 @@ canvas { max-width:100%; max-height:100%; }
       <option value="amybot-beginner">Amy Bot Beginner (~25k) - Basic</option>
       <option value="amybot-ddk">Amy Bot DDK (~15k) - Solid</option>
       <option value="amybot-sdk" selected>Amy Bot SDK (~5k) - Tactical</option>
-      <option value="leela-strong">Leela Zero (~5d) - Fighting</option>
+      <option value="nightly-katago">NightlyKataGo (Very Strong) - Fighting</option>
       <option value="kata-bot">KataGo (Strong) - Modern</option>
     </select>
   </div>
@@ -71,12 +71,20 @@ canvas { max-width:100%; max-height:100%; }
       <option value="white">White</option>
     </select>
   </div>
+  <div id="theme-selector" style="margin-bottom:15px;">
+    <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Theme:</label>
+    <select id="board-theme" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
+      <option value="classic">Classic Wood</option>
+      <option value="landscape">Ink Landscape</option>
+    </select>
+  </div>
   <button id="start-game-btn" onclick="startBotGame()">Start Game</button>
   <div id="status"></div>
   <div id="game-board" style="display:none;">
     <div style="display:flex; gap:10px; margin:0 auto 10px; max-width:300px;">
       <button id="pass-btn" style="flex:1; background:none; border:1px solid #6d5a4a; color:#a89080; padding:8px 20px; font-size:13px; border-radius:3px; cursor:pointer;" onclick="passMove()">Pass</button>
       <button id="resign-btn" style="flex:1; background:none; border:1px solid #6d5a4a; color:#a89080; padding:8px 20px; font-size:13px; border-radius:3px; cursor:pointer;" onclick="resignGame()">Resign</button>
+      <button id="return-menu-btn" style="display:none; flex:1; background:#c9a868; border:none; color:#1a1210; padding:8px 20px; font-size:13px; border-radius:3px; cursor:pointer;" onclick="returnToMenu()">New Game</button>
     </div>
     <div id="board-container-bot" style="height:400px; display:flex; align-items:center; justify-content:center;">
       <canvas id="canvas-bot" class="board-interactive"></canvas>
@@ -100,11 +108,12 @@ canvas { max-width:100%; max-height:100%; }
 const PROXY = 'http://localhost:5000';
 
 // Bot IDs and their characteristics
+// Note: Amy bots are officially maintained and always available
 const BOTS = {
   'amybot-beginner': { id: 605979, name: 'Amy Bot Beginner', rank: '~25k', style: 'Basic' },
   'amybot-ddk': { id: 431859, name: 'Amy Bot DDK', rank: '~15k', style: 'Solid' },
   'amybot-sdk': { id: 424928, name: 'Amy Bot SDK', rank: '~5k', style: 'Tactical' },
-  'leela-strong': { id: 1591164, name: 'Leela Zero Strong', rank: '~5d', style: 'Fighting' },
+  'nightly-katago': { id: 530672, name: 'NightlyKataGo', rank: 'Very Strong', style: 'Fighting' },
   'kata-bot': { id: 592684, name: 'KataGo', rank: 'Strong', style: 'Modern' }
 };
 
@@ -122,8 +131,105 @@ var botGame = {
   currentTurn: null,
   phase: 'play',
   previewMove: null,  // {x, y} for move being previewed
-  pendingMove: false  // Waiting for server confirmation
+  pendingMove: false,  // Waiting for server confirmation
+  theme: 'classic',   // 'classic' or 'landscape'
+  noise: null,        // Noise generator for landscape theme
+  inkField: null,     // Ink diffusion field
+  inkBuffer: null,    // Buffer for diffusion
+  gameSeed: null      // Seed for noise generation
 };
+
+// ============================================================================
+// Noise Generator for Landscape Theme
+// ============================================================================
+
+class Noise {
+  constructor(seed) {
+    this.p = new Uint8Array(512);
+    let s = seed | 0;
+    for (let i = 0; i < 256; i++) {
+      s = (s * 16807 + 7) & 0x7fffffff;
+      this.p[i] = s & 255;
+    }
+    for (let i = 0; i < 256; i++) this.p[i + 256] = this.p[i];
+  }
+  fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
+  lerp(a, b, t) { return a + t * (b - a); }
+  grad(h, x, y) {
+    const g = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+    const v = g[h & 7];
+    return v[0] * x + v[1] * y;
+  }
+  get(x, y) {
+    const X = Math.floor(x) & 255, Y = Math.floor(y) & 255;
+    const xf = x - Math.floor(x), yf = y - Math.floor(y);
+    const u = this.fade(xf), v = this.fade(yf);
+    const p = this.p;
+    const a = p[X] + Y, b = p[X + 1] + Y;
+    return this.lerp(
+      this.lerp(this.grad(p[a], xf, yf), this.grad(p[b], xf - 1, yf), u),
+      this.lerp(this.grad(p[a + 1], xf, yf - 1), this.grad(p[b + 1], xf - 1, yf - 1), u),
+      v
+    );
+  }
+  octaves(x, y, n, persistence) {
+    let val = 0, amp = 1, freq = 1, max = 0;
+    for (let i = 0; i < n; i++) {
+      val += this.get(x * freq, y * freq) * amp;
+      max += amp;
+      amp *= persistence;
+      freq *= 2;
+    }
+    return val / max;
+  }
+}
+
+// ============================================================================
+// Ink Field for Landscape Theme
+// ============================================================================
+
+const INK_RES = 128;
+
+function initInkField(size) {
+  botGame.inkField = new Float32Array(INK_RES * INK_RES);
+  botGame.inkBuffer = new Float32Array(INK_RES * INK_RES);
+}
+
+function dropInk(bx, by, color) {
+  const ix = (bx / (botGame.boardSize - 1)) * (INK_RES - 1);
+  const iy = (by / (botGame.boardSize - 1)) * (INK_RES - 1);
+  const radius = INK_RES * 0.08;
+  const intensity = color === 1 ? 0.6 : -0.6;
+
+  for (let y = 0; y < INK_RES; y++) {
+    for (let x = 0; x < INK_RES; x++) {
+      const dx = x - ix, dy = y - iy;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < radius) {
+        const falloff = Math.pow(1 - d / radius, 2);
+        botGame.inkField[y * INK_RES + x] += intensity * falloff;
+      }
+    }
+  }
+}
+
+function diffuseInk() {
+  for (let i = 0; i < 3; i++) {
+    for (let y = 1; y < INK_RES - 1; y++) {
+      for (let x = 1; x < INK_RES - 1; x++) {
+        const idx = y * INK_RES + x;
+        botGame.inkBuffer[idx] = (
+          botGame.inkField[idx] * 0.6 +
+          botGame.inkField[idx - 1] * 0.1 +
+          botGame.inkField[idx + 1] * 0.1 +
+          botGame.inkField[(y - 1) * INK_RES + x] * 0.1 +
+          botGame.inkField[(y + 1) * INK_RES + x] * 0.1
+        );
+      }
+    }
+    [botGame.inkField, botGame.inkBuffer] = [botGame.inkBuffer, botGame.inkField];
+  }
+}
 
 function showScreen(screenId) {
   document.getElementById('home-screen').style.display = 'none';
@@ -225,11 +331,19 @@ async function startBotGame() {
 
 async function challengeBot() {
   try {
-    // Get selected bot, board size and color
+    // Get selected bot, board size, color, and theme
     const selectedBot = document.getElementById('bot-select').value;
     const botId = BOTS[selectedBot].id;
     botGame.boardSize = parseInt(document.getElementById('board-size').value);
     const selectedColor = document.getElementById('player-color').value;
+    botGame.theme = document.getElementById('board-theme').value;
+
+    // Initialize landscape theme resources if selected
+    if (botGame.theme === 'landscape') {
+      botGame.gameSeed = Date.now();
+      botGame.noise = new Noise(botGame.gameSeed);
+      initInkField(botGame.boardSize);
+    }
 
     const challenge = {
       game: {
@@ -300,15 +414,43 @@ async function challengeBot() {
 function handleGameEvent(event, data) {
   // Game data received
   if (event === `game/${botGame.gameId}/gamedata`) {
-    setStatus('Game started!');
-    initBotBoard(data);
-    document.getElementById('start-game-btn').style.display = 'none';
-    document.getElementById('bot-selector').style.display = 'none';
-    document.getElementById('board-size-selector').style.display = 'none';
-    document.getElementById('color-selector').style.display = 'none';
-    document.getElementById('game-board').style.display = 'block';
-    drawBotBoard();
-    updateTurnInfo();
+    const gameData = data;
+
+    // Initial game setup
+    if (gameData.phase === 'play' && !botGame.board) {
+      setStatus('Game started!');
+      initBotBoard(gameData);
+      document.getElementById('start-game-btn').style.display = 'none';
+      document.getElementById('bot-selector').style.display = 'none';
+      document.getElementById('board-size-selector').style.display = 'none';
+      document.getElementById('color-selector').style.display = 'none';
+      document.getElementById('theme-selector').style.display = 'none';
+      document.getElementById('game-board').style.display = 'block';
+      drawBotBoard();
+      updateTurnInfo();
+    }
+
+    // Game finished with outcome
+    if (gameData.phase === 'finished' && gameData.outcome) {
+      const outcome = gameData.outcome;
+      let scoreText = 'Game Over\n';
+
+      if (outcome === 'Resignation') {
+        scoreText = 'Game Over - Resignation';
+      } else if (outcome === 'Timeout') {
+        scoreText = 'Game Over - Timeout';
+      } else {
+        // Parse score (format: "B+12.5" or "W+R")
+        scoreText = `Game Over\n${outcome}`;
+      }
+
+      setGameInfo(scoreText);
+
+      // Show return button
+      document.getElementById('pass-btn').style.display = 'none';
+      document.getElementById('resign-btn').style.display = 'none';
+      document.getElementById('return-menu-btn').style.display = 'block';
+    }
   }
 
   // Move received from server (includes our own moves echoed back)
@@ -326,6 +468,12 @@ function handleGameEvent(event, data) {
 
       botGame.board[y][x] = color;
       removeCapturesBot(x, y, color);
+
+      // Drop ink for landscape theme
+      if (botGame.theme === 'landscape') {
+        dropInk(x, y, color);
+        diffuseInk();
+      }
     }
 
     // Switch turn
@@ -341,17 +489,22 @@ function handleGameEvent(event, data) {
   // Phase changes
   if (event === `game/${botGame.gameId}/phase`) {
     botGame.phase = data;
+
+    if (data === 'stone removal') {
+      setGameInfo('Scoring...');
+      // Auto-accept stone removal recommendation
+      botGame.socket.emit('game/removed_stones/accept', {
+        auth: botGame.gameAuth,
+        game_id: botGame.gameId,
+        player_id: botGame.playerId,
+        stones: '',
+        strict_seki_mode: false
+      });
+    }
+
     if (data === 'finished') {
+      // Score will be shown via gamedata event
       setGameInfo('Game finished!');
-      // Show new game options after a delay
-      setTimeout(() => {
-        document.getElementById('game-board').style.display = 'none';
-        document.getElementById('start-game-btn').style.display = 'block';
-        document.getElementById('bot-selector').style.display = 'block';
-        document.getElementById('board-size-selector').style.display = 'block';
-        document.getElementById('color-selector').style.display = 'block';
-        setStatus('Ready to start a new game');
-      }, 2000);
     }
   }
 
@@ -389,8 +542,18 @@ function initBotBoard(gameData) {
         console.log(`  Move ${idx}: ${color === 1 ? 'black' : 'white'} at (${x}, ${y})`);
         botGame.board[y][x] = color;
         removeCapturesBot(x, y, color);
+
+        // Drop ink for landscape theme
+        if (botGame.theme === 'landscape') {
+          dropInk(x, y, color);
+        }
       }
     });
+
+    // Diffuse all ink at once for landscape theme
+    if (botGame.theme === 'landscape') {
+      diffuseInk();
+    }
   }
 
   // Set current turn based on move count
@@ -414,7 +577,17 @@ function updateTurnInfo() {
   setGameInfo(myTurn ? `Your turn (${colorName})` : `Bot's turn (${colorName})`);
 }
 
+// Main draw dispatcher
 function drawBotBoard() {
+  if (botGame.theme === 'landscape') {
+    drawBotBoardLandscape();
+  } else {
+    drawBotBoardClassic();
+  }
+}
+
+// Classic theme rendering
+function drawBotBoardClassic() {
   const canvas = document.getElementById('canvas-bot');
   const ctx = canvas.getContext('2d');
   const container = document.getElementById('board-container-bot');
@@ -530,6 +703,185 @@ function drawBotBoard() {
       ctx.globalAlpha = 1.0;
     }
   }
+}
+
+// Landscape theme rendering
+function drawBotBoardLandscape() {
+  const canvas = document.getElementById('canvas-bot');
+  const ctx = canvas.getContext('2d');
+  const container = document.getElementById('board-container-bot');
+
+  const boardSize = botGame.boardSize;
+  const displaySize = Math.min(container.clientWidth, container.clientHeight) - 20;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = displaySize * dpr;
+  canvas.height = displaySize * dpr;
+  canvas.style.width = displaySize + 'px';
+  canvas.style.height = displaySize + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const cs = displaySize / (boardSize + 1);
+  const m = cs;
+
+  // Render landscape background
+  renderLandscape(ctx, displaySize);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(60, 45, 30, 0.35)';
+  ctx.lineWidth = 0.8;
+  for (let i = 0; i < boardSize; i++) {
+    const pos = m + i * cs;
+    ctx.beginPath();
+    ctx.moveTo(m, pos);
+    ctx.lineTo(displaySize - m, pos);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pos, m);
+    ctx.lineTo(pos, displaySize - m);
+    ctx.stroke();
+  }
+
+  // Star points
+  const starPoints = boardSize === 19
+    ? [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]]
+    : boardSize === 13
+    ? [[3,3],[3,9],[6,6],[9,3],[9,9]]
+    : [[2,2],[2,6],[4,4],[6,2],[6,6]];
+
+  ctx.fillStyle = 'rgba(60, 45, 30, 0.45)';
+  for (const [x, y] of starPoints) {
+    ctx.beginPath();
+    ctx.arc(m + x * cs, m + y * cs, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Draw stones
+  for (let y = 0; y < boardSize; y++) {
+    for (let x = 0; x < boardSize; x++) {
+      const stone = botGame.board[y][x];
+      if (!stone) continue;
+
+      const cx = m + x * cs;
+      const cy = m + y * cs;
+      const r = cs * 0.45;
+
+      // Shadow
+      ctx.beginPath();
+      ctx.arc(cx + 1.2, cy + 1.5, r, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+
+      // Stone with gradient
+      const grad = ctx.createRadialGradient(
+        cx - r * 0.3, cy - r * 0.3, r * 0.1,
+        cx, cy, r
+      );
+
+      if (stone === 1) {
+        grad.addColorStop(0, '#4a4540');
+        grad.addColorStop(0.7, '#2a2725');
+        grad.addColorStop(1, '#1a1815');
+      } else {
+        grad.addColorStop(0, '#f5f0e8');
+        grad.addColorStop(0.5, '#e8e0d4');
+        grad.addColorStop(1, '#d8cfc0');
+      }
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+    }
+  }
+
+  // Draw preview move (semi-transparent, no landscape re-render for performance)
+  if (botGame.previewMove) {
+    const px = botGame.previewMove.x;
+    const py = botGame.previewMove.y;
+    const cx = m + px * cs;
+    const cy = m + py * cs;
+    const r = cs * 0.45;
+
+    const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                   (botGame.currentTurn === 2 && botGame.myColor === 'white');
+    if (myTurn) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = botGame.currentTurn === 1 ? 'rgba(30,28,25,0.3)' : 'rgba(240,235,225,0.3)';
+      ctx.fill();
+    }
+  }
+}
+
+function landscapeColor(noiseVal, inkVal) {
+  const base = noiseVal * 0.5 + 0.5; // 0..1
+
+  // Warm wood palette
+  const r0 = 180, g0 = 148, b0 = 110; // light wood
+  const r1 = 140, g1 = 108, b1 = 72;  // dark wood grain
+
+  let t = base;
+  let r = r0 + (r1 - r0) * t;
+  let g = g0 + (g1 - g0) * t;
+  let b = b0 + (b1 - b0) * t;
+
+  // Ink influence
+  const ink = Math.max(-1, Math.min(1, inkVal));
+  if (ink > 0) {
+    // Black stone ink: darker
+    r -= ink * 45;
+    g -= ink * 40;
+    b -= ink * 30;
+  } else {
+    // White stone ink: lighter
+    r -= ink * 30;
+    g -= ink * 28;
+    b -= ink * 20;
+  }
+
+  return [
+    Math.round(Math.max(0, Math.min(255, r))),
+    Math.round(Math.max(0, Math.min(255, g))),
+    Math.round(Math.max(0, Math.min(255, b)))
+  ];
+}
+
+function renderLandscape(ctx, displaySize) {
+  const imageData = ctx.createImageData(displaySize, displaySize);
+  const data = imageData.data;
+
+  for (let py = 0; py < displaySize; py++) {
+    for (let px = 0; px < displaySize; px++) {
+      const nx = px / displaySize * 4;
+      const ny = py / displaySize * 4;
+
+      // Layered noise for complex grain
+      const n1 = botGame.noise.octaves(nx, ny, 5, 0.55);
+      const n2 = botGame.noise.octaves(nx * 2.2 + 100, ny * 0.8 + 100, 3, 0.5) * 0.3;
+      const noiseVal = n1 + n2;
+
+      // Sample ink field with bilinear interpolation
+      const ix = (px / displaySize) * (INK_RES - 1);
+      const iy = (py / displaySize) * (INK_RES - 1);
+      const x0 = Math.floor(ix), y0 = Math.floor(iy);
+      const x1 = Math.min(x0 + 1, INK_RES - 1), y1 = Math.min(y0 + 1, INK_RES - 1);
+      const fx = ix - x0, fy = iy - y0;
+      const inkVal =
+        botGame.inkField[y0 * INK_RES + x0] * (1 - fx) * (1 - fy) +
+        botGame.inkField[y0 * INK_RES + x1] * fx * (1 - fy) +
+        botGame.inkField[y1 * INK_RES + x0] * (1 - fx) * fy +
+        botGame.inkField[y1 * INK_RES + x1] * fx * fy;
+
+      const [r, g, b] = landscapeColor(noiseVal, inkVal);
+      const i = (py * displaySize + px) * 4;
+      data[i] = r;
+      data[i + 1] = g;
+      data[i + 2] = b;
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
 }
 
 function removeCapturesBot(x, y, color) {
@@ -688,19 +1040,39 @@ function resignGame() {
       player_id: botGame.playerId
     });
 
-    setGameInfo('Game resigned');
+    setGameInfo('Resigned');
     botGame.phase = 'finished';
 
-    // Show new game options after a delay
-    setTimeout(() => {
-      document.getElementById('game-board').style.display = 'none';
-      document.getElementById('start-game-btn').style.display = 'block';
-      document.getElementById('bot-selector').style.display = 'block';
-      document.getElementById('board-size-selector').style.display = 'block';
-      document.getElementById('color-selector').style.display = 'block';
-      setStatus('Ready to start a new game');
-    }, 2000);
+    // Hide game controls, show return button
+    document.getElementById('pass-btn').style.display = 'none';
+    document.getElementById('resign-btn').style.display = 'none';
+    document.getElementById('return-menu-btn').style.display = 'block';
   }
+}
+
+function returnToMenu() {
+  // Reset game state
+  botGame.gameId = null;
+  botGame.phase = 'play';
+  botGame.previewMove = null;
+  botGame.pendingMove = false;
+  botGame.theme = 'classic';
+  botGame.noise = null;
+  botGame.inkField = null;
+  botGame.inkBuffer = null;
+
+  // Reset UI
+  document.getElementById('game-board').style.display = 'none';
+  document.getElementById('pass-btn').style.display = 'block';
+  document.getElementById('resign-btn').style.display = 'block';
+  document.getElementById('return-menu-btn').style.display = 'none';
+  document.getElementById('start-game-btn').style.display = 'block';
+  document.getElementById('bot-selector').style.display = 'block';
+  document.getElementById('board-size-selector').style.display = 'block';
+  document.getElementById('color-selector').style.display = 'block';
+  document.getElementById('theme-selector').style.display = 'block';
+  setStatus('Ready to start a new game');
+  setGameInfo('');
 }
 
 // ============================================================================

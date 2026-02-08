@@ -127,10 +127,14 @@ Content-Type: application/json
 }
 ```
 
-**Common Bot IDs:**
-- `605979` - amybot-beginner (~25k)
-- `431859` - amybot-ddk (~15k)
-- `424928` - amybot-sdk (~5k)
+**Reliable Bot IDs:**
+- `605979` - amybot-beginner (~25k) - Always available
+- `431859` - amybot-ddk (~15k) - Always available
+- `424928` - amybot-sdk (~5k) - Always available ⭐ Default
+- `530672` - NightlyKataGo (Very Strong) - Fighting style, usually available
+- `592684` - kata-bot (Strong) - Modern AI, intermittent availability
+
+**Note**: User-run bots (Leela Zero, etc.) may be offline. Amy bots are officially maintained.
 
 ### Get Game Details
 
