@@ -65,6 +65,7 @@ canvas { max-width:100%; max-height:100%; }
       <canvas id="canvas-bot" class="board-interactive"></canvas>
     </div>
     <div id="game-info" style="color:#a89080; margin-top:10px; text-align:center;"></div>
+    <button id="submit-move-btn" style="display:none; width:100%; max-width:300px; margin:15px auto 0; padding:16px; background:#c9a868; color:#1a1210; border:none; font-size:16px; border-radius:6px; cursor:pointer; font-weight:500; box-shadow:0 2px 8px rgba(201,168,104,0.3);" onclick="submitMove()">Place Stone</button>
   </div>
 </div>
 
@@ -93,7 +94,8 @@ var botGame = {
   myColor: null,
   currentTurn: null,
   phase: 'play',
-  lastMyMove: null  // Track our last move to ignore echoes
+  previewMove: null,  // {x, y} for move being previewed
+  pendingMove: false  // Waiting for server confirmation
 };
 
 function showScreen(screenId) {
@@ -264,26 +266,25 @@ function handleGameEvent(event, data) {
     updateTurnInfo();
   }
 
-  // Opponent move
+  // Move received from server (includes our own moves echoed back)
   if (event === `game/${botGame.gameId}/move`) {
     const [x, y] = data.move;
 
-    // Skip if this is an echo of our own move
-    if (botGame.lastMyMove &&
-        botGame.lastMyMove.x === x &&
-        botGame.lastMyMove.y === y) {
-      console.log('Skipping echo of our own move');
-      botGame.lastMyMove = null; // Clear after skipping
-      return;
-    }
-
-    // Process opponent's move
+    // Process move (pass if x,y are negative)
     if (x >= 0 && y >= 0) {
+      // Color is determined by whose turn it currently is
       const color = botGame.currentTurn;
       botGame.board[y][x] = color;
       removeCapturesBot(x, y, color);
     }
+
+    // Switch turn
     botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
+
+    // Clear pending state and reset button
+    botGame.pendingMove = false;
+    document.getElementById('submit-move-btn').textContent = 'Place Stone';
+
     drawBotBoard();
     updateTurnInfo();
   }
@@ -320,6 +321,10 @@ function initBotBoard(gameData) {
     }
   }
 
+  // Store player IDs to determine colors
+  const blackPlayerId = gameData.players?.black?.id;
+  const whitePlayerId = gameData.players?.white?.id;
+
   // Replay existing moves
   if (gameData.moves) {
     gameData.moves.forEach((moveData, idx) => {
@@ -332,8 +337,9 @@ function initBotBoard(gameData) {
     });
   }
 
-  // Set current turn
-  botGame.currentTurn = (gameData.moves.length % 2 === 0) ? 1 : 2;
+  // Set current turn based on move count
+  const moveCount = gameData.moves?.length || 0;
+  botGame.currentTurn = (moveCount % 2 === 0) ? 1 : 2;
 }
 
 function updateTurnInfo() {
@@ -436,6 +442,29 @@ function drawBotBoard() {
       }
     }
   }
+
+  // Draw preview move (semi-transparent)
+  if (botGame.previewMove) {
+    const px = botGame.previewMove.x;
+    const py = botGame.previewMove.y;
+    const cx = m + px * cs;
+    const cy = m + py * cs;
+    const r = cs * 0.45;
+
+    // Determine preview color based on whose turn it is
+    const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                   (botGame.currentTurn === 2 && botGame.myColor === 'white');
+    if (myTurn) {
+      const previewColor = botGame.currentTurn === 1 ? '#4a1e28' : '#e0a870';
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 6.3);
+      ctx.fillStyle = previewColor;
+      ctx.globalAlpha = 0.5;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+    }
+  }
 }
 
 function removeCapturesBot(x, y, color) {
@@ -480,6 +509,7 @@ function getGroupBot(x, y, color, visited) {
 
 document.getElementById('canvas-bot').onclick = function(e) {
   if (!botGame.gameId || botGame.phase !== 'play') return;
+  if (botGame.pendingMove) return; // Already waiting for server
 
   // Check if it's our turn
   const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
@@ -499,8 +529,21 @@ document.getElementById('canvas-bot').onclick = function(e) {
   if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) return;
   if (botGame.board[y][x] !== 0) return; // Spot occupied
 
-  // Track our move to ignore echo
-  botGame.lastMyMove = { x, y };
+  // Set preview and show submit button
+  botGame.previewMove = { x, y };
+  document.getElementById('submit-move-btn').style.display = 'block';
+  drawBotBoard();
+};
+
+function submitMove() {
+  if (!botGame.previewMove || botGame.pendingMove) return;
+
+  const { x, y } = botGame.previewMove;
+
+  // Mark as pending and hide button
+  botGame.pendingMove = true;
+  document.getElementById('submit-move-btn').style.display = 'none';
+  document.getElementById('submit-move-btn').textContent = 'Sending...';
 
   // Send move
   const moveStr = String.fromCharCode(97 + x) + String.fromCharCode(97 + y);
@@ -511,24 +554,26 @@ document.getElementById('canvas-bot').onclick = function(e) {
     move: moveStr
   });
 
-  // Optimistically update board
-  botGame.board[y][x] = botGame.currentTurn;
-  removeCapturesBot(x, y, botGame.currentTurn);
-  botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
+  // Clear preview - we'll only update when server confirms
+  botGame.previewMove = null;
   drawBotBoard();
-  updateTurnInfo();
-};
+}
 
 function passMove() {
   if (!botGame.gameId || botGame.phase !== 'play') return;
+  if (botGame.pendingMove) return; // Already waiting
 
   // Check if it's our turn
   const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
                  (botGame.currentTurn === 2 && botGame.myColor === 'white');
   if (!myTurn) return;
 
-  // Track pass move to ignore echo
-  botGame.lastMyMove = { x: -1, y: -1 };
+  // Clear any preview
+  botGame.previewMove = null;
+  document.getElementById('submit-move-btn').style.display = 'none';
+
+  // Mark as pending
+  botGame.pendingMove = true;
 
   // Send pass move
   botGame.socket.emit('game/move', {
@@ -538,10 +583,7 @@ function passMove() {
     move: '..'
   });
 
-  // Switch turns
-  botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
-  drawBotBoard();
-  updateTurnInfo();
+  // Don't update board - wait for server confirmation
 }
 
 function resignGame() {
