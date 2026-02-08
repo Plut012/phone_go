@@ -497,7 +497,13 @@ function handleGameEvent(event, data) {
     const moveArray = data.move || [];
     const [x, y, time] = moveArray;
 
-    console.log('Move received:', { x, y, time, currentTurn: botGame.currentTurn, data });
+    console.log('Move received:', { x, y, time, currentTurn: botGame.currentTurn, myColor: botGame.myColor, data });
+
+    // Skip if board not initialized yet (wait for gamedata)
+    if (!botGame.board) {
+      console.log('Move received before board initialized, skipping');
+      return;
+    }
 
     // Process move (pass if x,y are negative)
     if (x >= 0 && y >= 0 && botGame.board[y] && botGame.board[y][x] !== undefined) {
@@ -1103,15 +1109,20 @@ function resignGame() {
 }
 
 function returnToMenu() {
-  // Reset game state
+  // Reset game state completely
   botGame.gameId = null;
+  botGame.board = null;  // Important: reset board so new game initializes
   botGame.phase = 'play';
   botGame.previewMove = null;
   botGame.pendingMove = false;
+  botGame.currentTurn = null;
+  botGame.myColor = null;
   botGame.theme = 'classic';
   botGame.noise = null;
   botGame.inkField = null;
   botGame.inkBuffer = null;
+
+  console.log('Returned to menu, game state reset');
 
   // Reset UI
   document.getElementById('game-board').style.display = 'none';
