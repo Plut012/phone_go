@@ -3,27 +3,36 @@
 
 echo "=== Starting Phone Go ==="
 echo ""
+echo "🚀 Starting proxy server..."
+echo ""
 
-# Get the absolute path to the HTML file
-HTML_FILE="$(pwd)/go-flow.html"
+# Start proxy in background
+python proxy.py &
+PROXY_PID=$!
 
-# Try to open the HTML file in browser
+# Wait for proxy to start
+sleep 2
+
+# Try to open the URL in browser
+URL="http://localhost:5000"
+
 if command -v termux-open &> /dev/null; then
-    echo "📱 Opening go-flow.html in browser..."
-    termux-open "$HTML_FILE"
+    echo "📱 Opening $URL in browser..."
+    termux-open "$URL"
     echo "✓ Browser launched"
-elif command -v am &> /dev-null; then
-    echo "📱 Opening go-flow.html in browser..."
-    am start -a android.intent.action.VIEW -d "file://$HTML_FILE" -t "text/html" &> /dev/null
+elif command -v am &> /dev/null; then
+    echo "📱 Opening $URL in browser..."
+    am start -a android.intent.action.VIEW -d "$URL" &> /dev/null
     echo "✓ Browser launched"
 else
     echo "⚠️  Could not auto-open browser"
-    echo "   Please manually open: file://$HTML_FILE"
+    echo "   Please manually open: $URL"
 fi
 
 echo ""
-echo "🚀 Starting proxy on http://localhost:5000"
-echo "   Press Ctrl+C to stop"
+echo "✓ Proxy running on $URL"
+echo "  Press Ctrl+C to stop"
 echo ""
 
-python proxy.py
+# Wait for proxy process
+wait $PROXY_PID

@@ -25,7 +25,7 @@ python proxy.py
 The proxy runs on `http://localhost:5000`
 
 ### 3. Open the UI
-Open `go-flow.html` in your browser (Chrome recommended)
+Open `http://localhost:5000` in your browser (Chrome recommended)
 
 ### 4. Play!
 - Click "Play Bot"
@@ -43,19 +43,21 @@ Open `go-flow.html` in your browser (Chrome recommended)
 ## How it works
 
 ```
-Browser (go-flow.html) ↔ Proxy (localhost:5000) ↔ OGS Server
+Browser (localhost:5000) ↔ Proxy Server ↔ OGS Server
 ```
 
-The proxy bypasses CORS restrictions and forwards:
-- REST API calls (login, challenge, game details)
-- WebSocket messages (real-time moves)
+The proxy server:
+- Serves the HTML UI at `http://localhost:5000`
+- Bypasses CORS restrictions
+- Forwards REST API calls (login, challenge, game details)
+- Forwards WebSocket messages (real-time moves)
 
 ## Termux Setup (Android)
 
 **Quick setup:**
 ```bash
-./setup.sh
-./run.sh
+./setup.sh  # One-time setup
+./run.sh    # Auto-opens browser and starts proxy
 ```
 
 **Manual setup:**
@@ -65,7 +67,7 @@ pip install -r requirements.txt
 python proxy.py
 ```
 
-Then open `go-flow.html` in Chrome at `file:///...`
+Then open `http://localhost:5000` in your browser
 
 ## Configuration
 

@@ -5,7 +5,7 @@ Runs on phone via Termux: python proxy.py
 """
 
 import requests
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import socketio
 import threading
@@ -69,6 +69,16 @@ def auto_login():
     except Exception as e:
         log(f"Auto-login error: {e}")
         return False
+
+
+# ============================================================================
+# Serve HTML UI
+# ============================================================================
+
+@app.route('/')
+def serve_html():
+    """Serve the go-flow.html file"""
+    return send_file('go-flow.html')
 
 
 # ============================================================================
@@ -297,7 +307,7 @@ def catch_all_from_client(event, sid, data=None):
 
 if __name__ == '__main__':
     log("Starting OGS proxy on http://localhost:5000")
-    log("Open go-flow.html in browser")
+    log("Serving UI at http://localhost:5000/")
 
     # Try auto-login if credentials are in environment
     auto_login()
