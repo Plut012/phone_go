@@ -245,11 +245,14 @@ async function challengeBot() {
     botGame.gameAuth = gameData.auth;
 
     // Determine our color
+    console.log('Game data players:', gameData.players);
+    console.log('My player ID:', botGame.playerId);
     if (gameData.players.black.id === botGame.playerId) {
       botGame.myColor = 'black';
     } else {
       botGame.myColor = 'white';
     }
+    console.log('My color determined:', botGame.myColor);
 
     // Connect to game
     botGame.socket.emit('game/connect', {
@@ -530,13 +533,32 @@ function getGroupBot(x, y, color, visited) {
 }
 
 document.getElementById('canvas-bot').onclick = function(e) {
-  if (!botGame.gameId || botGame.phase !== 'play') return;
-  if (botGame.pendingMove) return; // Already waiting for server
+  console.log('Canvas clicked!', {
+    gameId: botGame.gameId,
+    phase: botGame.phase,
+    pendingMove: botGame.pendingMove,
+    currentTurn: botGame.currentTurn,
+    myColor: botGame.myColor
+  });
+
+  if (!botGame.gameId || botGame.phase !== 'play') {
+    console.log('Blocked: no gameId or not in play phase');
+    return;
+  }
+  if (botGame.pendingMove) {
+    console.log('Blocked: already pending');
+    return;
+  }
 
   // Check if it's our turn
   const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
                  (botGame.currentTurn === 2 && botGame.myColor === 'white');
-  if (!myTurn) return;
+  console.log('Turn check:', { currentTurn: botGame.currentTurn, myColor: botGame.myColor, myTurn });
+
+  if (!myTurn) {
+    console.log('Blocked: not your turn');
+    return;
+  }
 
   const canvas = document.getElementById('canvas-bot');
   const rect = canvas.getBoundingClientRect();
@@ -548,10 +570,19 @@ document.getElementById('canvas-bot').onclick = function(e) {
   const x = Math.round((e.clientX - rect.left - m) / cs);
   const y = Math.round((e.clientY - rect.top - m) / cs);
 
-  if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) return;
-  if (botGame.board[y][x] !== 0) return; // Spot occupied
+  console.log('Clicked position:', { x, y, boardSize });
+
+  if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) {
+    console.log('Blocked: out of bounds');
+    return;
+  }
+  if (botGame.board[y][x] !== 0) {
+    console.log('Blocked: spot occupied');
+    return;
+  }
 
   // Set preview and show submit button
+  console.log('Setting preview and showing button');
   botGame.previewMove = { x, y };
   document.getElementById('submit-move-btn').style.display = 'block';
   drawBotBoard();
