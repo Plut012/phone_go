@@ -54,6 +54,14 @@ canvas { max-width:100%; max-height:100%; }
       <option value="19">19x19</option>
     </select>
   </div>
+  <div id="color-selector" style="margin-bottom:15px;">
+    <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Your Color:</label>
+    <select id="player-color" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
+      <option value="automatic">Random</option>
+      <option value="black">Black (you go first)</option>
+      <option value="white">White (bot goes first)</option>
+    </select>
+  </div>
   <button id="start-game-btn" onclick="startBotGame()">Start Game</button>
   <div id="status"></div>
   <div id="game-board" style="display:none;">
@@ -198,8 +206,9 @@ async function startBotGame() {
 
 async function challengeBot() {
   try {
-    // Get selected board size
+    // Get selected board size and color
     botGame.boardSize = parseInt(document.getElementById('board-size').value);
+    const selectedColor = document.getElementById('player-color').value;
 
     const challenge = {
       game: {
@@ -221,7 +230,7 @@ async function challengeBot() {
           max_time: 300
         }
       },
-      challenger_color: "automatic",
+      challenger_color: selectedColor,
       min_ranking: -1000,
       max_ranking: 1000
     };
@@ -261,6 +270,7 @@ function handleGameEvent(event, data) {
     initBotBoard(data);
     document.getElementById('start-game-btn').style.display = 'none';
     document.getElementById('board-size-selector').style.display = 'none';
+    document.getElementById('color-selector').style.display = 'none';
     document.getElementById('game-board').style.display = 'block';
     drawBotBoard();
     updateTurnInfo();
@@ -268,12 +278,17 @@ function handleGameEvent(event, data) {
 
   // Move received from server (includes our own moves echoed back)
   if (event === `game/${botGame.gameId}/move`) {
-    const [x, y] = data.move;
+    const moveArray = data.move || [];
+    const [x, y, time] = moveArray;
+
+    console.log('Move received:', { x, y, time, currentTurn: botGame.currentTurn, data });
 
     // Process move (pass if x,y are negative)
-    if (x >= 0 && y >= 0) {
-      // Color is determined by whose turn it currently is
+    if (x >= 0 && y >= 0 && botGame.board[y] && botGame.board[y][x] !== undefined) {
+      // Color is determined by whose turn it currently is (before the move)
       const color = botGame.currentTurn;
+      console.log(`Placing ${color === 1 ? 'black' : 'white'} stone at (${x}, ${y})`);
+
       botGame.board[y][x] = color;
       removeCapturesBot(x, y, color);
     }
@@ -299,6 +314,7 @@ function handleGameEvent(event, data) {
         document.getElementById('game-board').style.display = 'none';
         document.getElementById('start-game-btn').style.display = 'block';
         document.getElementById('board-size-selector').style.display = 'block';
+        document.getElementById('color-selector').style.display = 'block';
         setStatus('Ready to start a new game');
       }, 2000);
     }
@@ -311,6 +327,8 @@ function handleGameEvent(event, data) {
 }
 
 function initBotBoard(gameData) {
+  console.log('Initializing board with gameData:', gameData);
+
   // Create board of dynamic size
   const size = botGame.boardSize;
   botGame.board = [];
@@ -324,13 +342,16 @@ function initBotBoard(gameData) {
   // Store player IDs to determine colors
   const blackPlayerId = gameData.players?.black?.id;
   const whitePlayerId = gameData.players?.white?.id;
+  console.log('Players:', { black: blackPlayerId, white: whitePlayerId, myId: botGame.playerId, myColor: botGame.myColor });
 
   // Replay existing moves
-  if (gameData.moves) {
+  if (gameData.moves && gameData.moves.length > 0) {
+    console.log(`Replaying ${gameData.moves.length} existing moves`);
     gameData.moves.forEach((moveData, idx) => {
       const [x, y] = moveData;
       if (x >= 0 && y >= 0) {
         const color = (idx % 2 === 0) ? 1 : 2; // Black plays first
+        console.log(`  Move ${idx}: ${color === 1 ? 'black' : 'white'} at (${x}, ${y})`);
         botGame.board[y][x] = color;
         removeCapturesBot(x, y, color);
       }
@@ -340,6 +361,7 @@ function initBotBoard(gameData) {
   // Set current turn based on move count
   const moveCount = gameData.moves?.length || 0;
   botGame.currentTurn = (moveCount % 2 === 0) ? 1 : 2;
+  console.log(`Move count: ${moveCount}, current turn: ${botGame.currentTurn === 1 ? 'black' : 'white'}`);
 }
 
 function updateTurnInfo() {
@@ -604,6 +626,7 @@ function resignGame() {
       document.getElementById('game-board').style.display = 'none';
       document.getElementById('start-game-btn').style.display = 'block';
       document.getElementById('board-size-selector').style.display = 'block';
+      document.getElementById('color-selector').style.display = 'block';
       setStatus('Ready to start a new game');
     }, 2000);
   }
