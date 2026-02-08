@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Flow</title>
+<script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#1a1210; font-family:sans-serif; height:100vh; overflow:hidden; }
+#input-screen { padding:20px; height:100%; display:flex; flex-direction:column; }
+#input-screen h1 { color:#e8dcc4; font-size:22px; margin-bottom:10px; }
+#input-screen p { color:#a89080; font-size:13px; margin-bottom:15px; }
+#sgf-input { flex:1; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-family:monospace; font-size:11px; padding:12px; resize:none; }
+#sgf-input::placeholder { color:#6d5a4a; }
+#load-btn { margin-top:12px; padding:14px; background:#c9a868; color:#1a1210; border:none; font-size:15px; }
+#board-screen { display:none; height:100%; position:relative; }
+#board-container { height:100%; display:flex; align-items:center; justify-content:center; padding:10px; }
+canvas { max-width:100%; max-height:100%; }
+#info { position:absolute; top:10px; right:14px; color:#a89080; font-size:14px; }
+#back { position:absolute; top:10px; left:14px; color:#a89080; font-size:22px; background:none; border:none; }
+#home-screen { padding:20px; height:100%; display:flex; flex-direction:column; justify-content:center; }
+#home-screen h1 { color:#e8dcc4; font-size:28px; margin-bottom:30px; text-align:center; }
+.menu-btn { padding:16px; margin:8px 0; background:#c9a868; color:#1a1210; border:none; font-size:16px; border-radius:4px; }
+#bot-screen { display:none; padding:20px; height:100%; overflow-y:auto; }
+#bot-screen h2 { color:#e8dcc4; font-size:20px; margin-bottom:15px; }
+#bot-screen button { width:100%; padding:14px; margin:12px 0; background:#c9a868; color:#1a1210; border:none; font-size:15px; border-radius:4px; cursor:pointer; }
+#status { color:#a89080; font-size:13px; margin:10px 0; min-height:20px; }
+.board-interactive canvas { cursor:pointer; }
+</style>
+</head>
+<body>
+
+<div id="home-screen">
+  <h1>Flow</h1>
+  <button class="menu-btn" onclick="showScreen('bot-screen')">Play Bot</button>
+  <button class="menu-btn" onclick="showScreen('input-screen')">Review SGF</button>
+</div>
+
+<div id="input-screen" style="display:none;">
+  <h1>Flow</h1>
+  <p>Paste SGF. Tap right/left to navigate.</p>
+  <textarea id="sgf-input" placeholder="(;GM[1]..."></textarea>
+  <button id="load-btn">Load Game</button>
+</div>
+
+<div id="bot-screen">
+  <h2>Play Bot</h2>
+  <div id="board-size-selector" style="margin-bottom:15px;">
+    <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Board Size:</label>
+    <select id="board-size" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
+      <option value="9">9x9</option>
+      <option value="13">13x13</option>
+      <option value="19">19x19</option>
+    </select>
+  </div>
+  <button id="start-game-btn" onclick="startBotGame()">Start Game</button>
+  <div id="status"></div>
+  <div id="game-board" style="display:none;">
+    <div style="display:flex; gap:10px; margin:0 auto 10px; max-width:300px;">
+      <button id="pass-btn" style="flex:1; background:none; border:1px solid #6d5a4a; color:#a89080; padding:8px 20px; font-size:13px; border-radius:3px; cursor:pointer;" onclick="passMove()">Pass</button>
+      <button id="resign-btn" style="flex:1; background:none; border:1px solid #6d5a4a; color:#a89080; padding:8px 20px; font-size:13px; border-radius:3px; cursor:pointer;" onclick="resignGame()">Resign</button>
+    </div>
+    <div id="board-container-bot" style="height:400px; display:flex; align-items:center; justify-content:center;">
+      <canvas id="canvas-bot" class="board-interactive"></canvas>
+    </div>
+    <div id="game-info" style="color:#a89080; margin-top:10px; text-align:center;"></div>
+  </div>
+</div>
+
+<div id="board-screen">
+  <button id="back">&larr;</button>
+  <div id="board-container"><canvas id="canvas"></canvas></div>
+  <div id="info"></div>
+</div>
+
+<script>
+// ============================================================================
+// Bot Play Mode
+// ============================================================================
+
+const PROXY = 'http://localhost:5000';
+const BOT_ID = 605979; // amybot-beginner
+
+var botGame = {
+  socket: null,
+  playerId: null,
+  username: null,
+  gameId: null,
+  gameAuth: null,
+  board: null,
+  boardSize: 9,
+  myColor: null,
+  currentTurn: null,
+  phase: 'play',
+  lastMyMove: null  // Track our last move to ignore echoes
+};
+
+function showScreen(screenId) {
+  document.getElementById('home-screen').style.display = 'none';
+  document.getElementById('input-screen').style.display = 'none';
+  document.getElementById('bot-screen').style.display = 'none';
+  document.getElementById('board-screen').style.display = 'none';
+  document.getElementById(screenId).style.display = screenId === 'input-screen' ? 'flex' : 'block';
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+function setGameInfo(msg) {
+  document.getElementById('game-info').textContent = msg;
+}
+
+async function apiCall(endpoint, method = 'GET', body = null) {
+  const opts = { method, headers: {} };
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(PROXY + endpoint, opts);
+  return resp.json();
+}
+
+async function startBotGame() {
+  try {
+    setStatus('Getting config...');
+
+    // Get config (proxy already authenticated via .env)
+    const config = await apiCall('/api/config');
+    botGame.playerId = config.user.id;
+    botGame.username = config.user.username;
+    const chatAuth = config.chat_auth;
+    const notificationAuth = config.notification_auth;
+
+    // Connect WebSocket
+    setStatus('Connecting to OGS...');
+    botGame.socket = io(PROXY);
+
+    botGame.socket.on('connect', () => {
+      setStatus('Connected! Authenticating...');
+      botGame.socket.emit('connect_ogs');
+    });
+
+    botGame.socket.on('ogs_connected', () => {
+      setStatus('Authenticated! Challenging bot...');
+
+      // Authenticate
+      botGame.socket.emit('authenticate', {
+        player_id: botGame.playerId,
+        username: botGame.username,
+        auth: chatAuth
+      });
+
+      botGame.socket.emit('notification/connect', {
+        player_id: botGame.playerId,
+        username: botGame.username,
+        auth: notificationAuth
+      });
+
+      botGame.socket.emit('chat/connect', {
+        player_id: botGame.playerId,
+        username: botGame.username,
+        auth: chatAuth
+      });
+
+      // Start keep-alive
+      setInterval(() => {
+        botGame.socket.emit('net/ping', { client: Date.now() });
+      }, 20000);
+
+      // Challenge bot
+      challengeBot();
+    });
+
+    botGame.socket.on('error', (err) => {
+      setStatus('Error: ' + (err.message || JSON.stringify(err)));
+      console.error('Socket error:', err);
+    });
+
+    botGame.socket.on('ogs_disconnected', () => {
+      setStatus('Disconnected from OGS');
+    });
+
+    // Listen for game events
+    botGame.socket.onAny((event, data) => {
+      console.log('Event:', event, data);
+      handleGameEvent(event, data);
+    });
+
+  } catch (err) {
+    setStatus('Error: ' + err.message);
+    console.error(err);
+  }
+}
+
+async function challengeBot() {
+  try {
+    // Get selected board size
+    botGame.boardSize = parseInt(document.getElementById('board-size').value);
+
+    const challenge = {
+      game: {
+        name: "Sparring",
+        rules: "chinese",
+        ranked: false,
+        width: botGame.boardSize,
+        height: botGame.boardSize,
+        handicap: 0,
+        komi_auto: "automatic",
+        disable_analysis: false,
+        initial_state: null,
+        private: false,
+        time_control: "fischer",
+        time_control_parameters: {
+          system: "fischer",
+          time_increment: 30,
+          initial_time: 120,
+          max_time: 300
+        }
+      },
+      challenger_color: "automatic",
+      min_ranking: -1000,
+      max_ranking: 1000
+    };
+
+    const result = await apiCall('/api/challenge/' + BOT_ID, 'POST', challenge);
+    botGame.gameId = result.game;
+
+    setStatus('Game created! Waiting for bot...');
+
+    // Get game details for auth token
+    const gameData = await apiCall('/api/game/' + botGame.gameId);
+    botGame.gameAuth = gameData.auth;
+
+    // Determine our color
+    if (gameData.players.black.id === botGame.playerId) {
+      botGame.myColor = 'black';
+    } else {
+      botGame.myColor = 'white';
+    }
+
+    // Connect to game
+    botGame.socket.emit('game/connect', {
+      player_id: botGame.playerId,
+      game_id: botGame.gameId,
+      chat: false
+    });
+
+  } catch (err) {
+    setStatus('Challenge error: ' + err.message);
+  }
+}
+
+function handleGameEvent(event, data) {
+  // Game data received
+  if (event === `game/${botGame.gameId}/gamedata`) {
+    setStatus('Game started!');
+    initBotBoard(data);
+    document.getElementById('start-game-btn').style.display = 'none';
+    document.getElementById('board-size-selector').style.display = 'none';
+    document.getElementById('game-board').style.display = 'block';
+    drawBotBoard();
+    updateTurnInfo();
+  }
+
+  // Opponent move
+  if (event === `game/${botGame.gameId}/move`) {
+    const [x, y] = data.move;
+
+    // Skip if this is an echo of our own move
+    if (botGame.lastMyMove &&
+        botGame.lastMyMove.x === x &&
+        botGame.lastMyMove.y === y) {
+      console.log('Skipping echo of our own move');
+      botGame.lastMyMove = null; // Clear after skipping
+      return;
+    }
+
+    // Process opponent's move
+    if (x >= 0 && y >= 0) {
+      const color = botGame.currentTurn;
+      botGame.board[y][x] = color;
+      removeCapturesBot(x, y, color);
+    }
+    botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
+    drawBotBoard();
+    updateTurnInfo();
+  }
+
+  // Phase changes
+  if (event === `game/${botGame.gameId}/phase`) {
+    botGame.phase = data;
+    if (data === 'finished') {
+      setGameInfo('Game finished!');
+      // Show new game options after a delay
+      setTimeout(() => {
+        document.getElementById('game-board').style.display = 'none';
+        document.getElementById('start-game-btn').style.display = 'block';
+        document.getElementById('board-size-selector').style.display = 'block';
+        setStatus('Ready to start a new game');
+      }, 2000);
+    }
+  }
+
+  // Clock updates
+  if (event === `game/${botGame.gameId}/clock`) {
+    // Could display time here
+  }
+}
+
+function initBotBoard(gameData) {
+  // Create board of dynamic size
+  const size = botGame.boardSize;
+  botGame.board = [];
+  for (let i = 0; i < size; i++) {
+    botGame.board[i] = [];
+    for (let j = 0; j < size; j++) {
+      botGame.board[i][j] = 0;
+    }
+  }
+
+  // Replay existing moves
+  if (gameData.moves) {
+    gameData.moves.forEach((moveData, idx) => {
+      const [x, y] = moveData;
+      if (x >= 0 && y >= 0) {
+        const color = (idx % 2 === 0) ? 1 : 2; // Black plays first
+        botGame.board[y][x] = color;
+        removeCapturesBot(x, y, color);
+      }
+    });
+  }
+
+  // Set current turn
+  botGame.currentTurn = (gameData.moves.length % 2 === 0) ? 1 : 2;
+}
+
+function updateTurnInfo() {
+  const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                 (botGame.currentTurn === 2 && botGame.myColor === 'white');
+  const colorName = botGame.currentTurn === 1 ? 'Black' : 'White';
+  setGameInfo(myTurn ? `Your turn (${colorName})` : `Bot's turn (${colorName})`);
+}
+
+function drawBotBoard() {
+  const canvas = document.getElementById('canvas-bot');
+  const ctx = canvas.getContext('2d');
+  const container = document.getElementById('board-container-bot');
+
+  const boardSize = botGame.boardSize;
+  const displaySize = Math.min(container.clientWidth, container.clientHeight) - 20;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = displaySize * dpr;
+  canvas.height = displaySize * dpr;
+  canvas.style.width = displaySize + 'px';
+  canvas.style.height = displaySize + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const cs = displaySize / (boardSize + 1);
+  const m = cs;
+
+  // Board background
+  ctx.fillStyle = '#7d5c4a';
+  ctx.fillRect(0, 0, displaySize, displaySize);
+
+  // Grid lines
+  ctx.strokeStyle = '#1a1210';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < boardSize; i++) {
+    ctx.beginPath();
+    ctx.moveTo(m + i * cs, m);
+    ctx.lineTo(m + i * cs, m + (boardSize - 1) * cs);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(m, m + i * cs);
+    ctx.lineTo(m + (boardSize - 1) * cs, m + i * cs);
+    ctx.stroke();
+  }
+
+  // Star points
+  ctx.fillStyle = '#1a1210';
+  if (boardSize === 9) {
+    [2, 6].forEach(i => {
+      [2, 6].forEach(j => {
+        ctx.beginPath();
+        ctx.arc(m + i * cs, m + j * cs, cs * 0.1, 0, 6.3);
+        ctx.fill();
+      });
+    });
+    ctx.beginPath();
+    ctx.arc(m + 4 * cs, m + 4 * cs, cs * 0.1, 0, 6.3);
+    ctx.fill();
+  } else if (boardSize === 13) {
+    [3, 9].forEach(i => {
+      [3, 9].forEach(j => {
+        ctx.beginPath();
+        ctx.arc(m + i * cs, m + j * cs, cs * 0.1, 0, 6.3);
+        ctx.fill();
+      });
+    });
+    ctx.beginPath();
+    ctx.arc(m + 6 * cs, m + 6 * cs, cs * 0.1, 0, 6.3);
+    ctx.fill();
+  } else if (boardSize === 19) {
+    [3, 9, 15].forEach(i => {
+      [3, 9, 15].forEach(j => {
+        ctx.beginPath();
+        ctx.arc(m + i * cs, m + j * cs, cs * 0.1, 0, 6.3);
+        ctx.fill();
+      });
+    });
+  }
+
+  // Draw stones
+  for (let y = 0; y < boardSize; y++) {
+    for (let x = 0; x < boardSize; x++) {
+      const stone = botGame.board[y][x];
+      if (stone) {
+        const cx = m + x * cs;
+        const cy = m + y * cs;
+        const r = cs * 0.45;
+
+        // Shadow
+        ctx.beginPath();
+        ctx.arc(cx + 1.5, cy + 1.5, r, 0, 6.3);
+        ctx.fillStyle = 'rgba(15,10,8,0.4)';
+        ctx.fill();
+
+        // Stone
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, 6.3);
+        ctx.fillStyle = stone === 1 ? '#4a1e28' : '#e0a870';
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function removeCapturesBot(x, y, color) {
+  const opp = color === 1 ? 2 : 1;
+  const dirs = [[0,1],[0,-1],[1,0],[-1,0]];
+  const size = botGame.boardSize;
+
+  dirs.forEach(([dx, dy]) => {
+    const nx = x + dx;
+    const ny = y + dy;
+    if (nx >= 0 && nx < size && ny >= 0 && ny < size && botGame.board[ny][nx] === opp) {
+      const group = getGroupBot(nx, ny, opp, {});
+      if (group.libs === 0) {
+        group.stones.forEach(s => {
+          botGame.board[s.y][s.x] = 0;
+        });
+      }
+    }
+  });
+}
+
+function getGroupBot(x, y, color, visited) {
+  const size = botGame.boardSize;
+  if (x < 0 || x >= size || y < 0 || y >= size) return { stones: [], libs: 0 };
+  const key = x + ',' + y;
+  if (visited[key]) return { stones: [], libs: 0 };
+  if (botGame.board[y][x] === 0) return { stones: [], libs: 1 };
+  if (botGame.board[y][x] !== color) return { stones: [], libs: 0 };
+
+  visited[key] = true;
+  let stones = [{x, y}];
+  let libs = 0;
+
+  [[0,1],[0,-1],[1,0],[-1,0]].forEach(([dx, dy]) => {
+    const result = getGroupBot(x + dx, y + dy, color, visited);
+    stones = stones.concat(result.stones);
+    libs += result.libs;
+  });
+
+  return { stones, libs };
+}
+
+document.getElementById('canvas-bot').onclick = function(e) {
+  if (!botGame.gameId || botGame.phase !== 'play') return;
+
+  // Check if it's our turn
+  const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                 (botGame.currentTurn === 2 && botGame.myColor === 'white');
+  if (!myTurn) return;
+
+  const canvas = document.getElementById('canvas-bot');
+  const rect = canvas.getBoundingClientRect();
+  const boardSize = botGame.boardSize;
+  const size = rect.width;
+  const cs = size / (boardSize + 1);
+  const m = cs;
+
+  const x = Math.round((e.clientX - rect.left - m) / cs);
+  const y = Math.round((e.clientY - rect.top - m) / cs);
+
+  if (x < 0 || x >= boardSize || y < 0 || y >= boardSize) return;
+  if (botGame.board[y][x] !== 0) return; // Spot occupied
+
+  // Track our move to ignore echo
+  botGame.lastMyMove = { x, y };
+
+  // Send move
+  const moveStr = String.fromCharCode(97 + x) + String.fromCharCode(97 + y);
+  botGame.socket.emit('game/move', {
+    auth: botGame.gameAuth,
+    game_id: botGame.gameId,
+    player_id: botGame.playerId,
+    move: moveStr
+  });
+
+  // Optimistically update board
+  botGame.board[y][x] = botGame.currentTurn;
+  removeCapturesBot(x, y, botGame.currentTurn);
+  botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
+  drawBotBoard();
+  updateTurnInfo();
+};
+
+function passMove() {
+  if (!botGame.gameId || botGame.phase !== 'play') return;
+
+  // Check if it's our turn
+  const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                 (botGame.currentTurn === 2 && botGame.myColor === 'white');
+  if (!myTurn) return;
+
+  // Track pass move to ignore echo
+  botGame.lastMyMove = { x: -1, y: -1 };
+
+  // Send pass move
+  botGame.socket.emit('game/move', {
+    auth: botGame.gameAuth,
+    game_id: botGame.gameId,
+    player_id: botGame.playerId,
+    move: '..'
+  });
+
+  // Switch turns
+  botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
+  drawBotBoard();
+  updateTurnInfo();
+}
+
+function resignGame() {
+  if (!botGame.gameId) return;
+
+  if (confirm('Are you sure you want to resign?')) {
+    botGame.socket.emit('game/resign', {
+      auth: botGame.gameAuth,
+      game_id: botGame.gameId,
+      player_id: botGame.playerId
+    });
+
+    setGameInfo('Game resigned');
+    botGame.phase = 'finished';
+
+    // Show new game options after a delay
+    setTimeout(() => {
+      document.getElementById('game-board').style.display = 'none';
+      document.getElementById('start-game-btn').style.display = 'block';
+      document.getElementById('board-size-selector').style.display = 'block';
+      setStatus('Ready to start a new game');
+    }, 2000);
+  }
+}
+
+// ============================================================================
+// SGF Review Mode (original code)
+// ============================================================================
+
+var moves = [];
+var move = 0;
+var positions = [];
+var board = [];
+var canvas = document.getElementById('canvas');
+var ctx = canvas.getContext('2d');
+
+function emptyBoard() {
+  var b = [];
+  for (var i = 0; i < 19; i++) {
+    b[i] = [];
+    for (var j = 0; j < 19; j++) b[i][j] = 0;
+  }
+  return b;
+}
+
+function copyBoard(b) {
+  var c = [];
+  for (var i = 0; i < 19; i++) c[i] = b[i].slice();
+  return c;
+}
+
+function parseSGF(sgf) {
+  var result = [];
+  var s = sgf.replace(/\s+/g, '');
+  var re = /;([BW])\[([a-s])([a-s])\]/g;
+  var m;
+  while ((m = re.exec(s)) !== null) {
+    var color = m[1] === 'B' ? 1 : 2;
+    var x = m[2].charCodeAt(0) - 97;
+    var y = m[3].charCodeAt(0) - 97;
+    result.push({c: color, x: x, y: y});
+  }
+  return result;
+}
+
+function getGroup(b, x, y, color, visited) {
+  if (x < 0 || x > 18 || y < 0 || y > 18) return {stones: [], libs: 0};
+  var key = x + ',' + y;
+  if (visited[key]) return {stones: [], libs: 0};
+  if (b[y][x] === 0) return {stones: [], libs: 1};
+  if (b[y][x] !== color) return {stones: [], libs: 0};
+  visited[key] = true;
+  var stones = [{x: x, y: y}];
+  var libs = 0;
+  var dirs = [[0,1],[0,-1],[1,0],[-1,0]];
+  for (var i = 0; i < 4; i++) {
+    var r = getGroup(b, x + dirs[i][0], y + dirs[i][1], color, visited);
+    stones = stones.concat(r.stones);
+    libs += r.libs;
+  }
+  return {stones: stones, libs: libs};
+}
+
+function removeCaptures(b, x, y, color) {
+  var opp = color === 1 ? 2 : 1;
+  var dirs = [[0,1],[0,-1],[1,0],[-1,0]];
+  for (var i = 0; i < 4; i++) {
+    var nx = x + dirs[i][0];
+    var ny = y + dirs[i][1];
+    if (nx >= 0 && nx < 19 && ny >= 0 && ny < 19 && b[ny][nx] === opp) {
+      var g = getGroup(b, nx, ny, opp, {});
+      if (g.libs === 0) {
+        for (var j = 0; j < g.stones.length; j++) {
+          b[g.stones[j].y][g.stones[j].x] = 0;
+        }
+      }
+    }
+  }
+}
+
+function loadGame(sgf) {
+  moves = parseSGF(sgf);
+  if (moves.length === 0) { alert('No moves found'); return false; }
+  board = emptyBoard();
+  positions = [copyBoard(board)];
+  for (var i = 0; i < moves.length; i++) {
+    board[moves[i].y][moves[i].x] = moves[i].c;
+    removeCaptures(board, moves[i].x, moves[i].y, moves[i].c);
+    positions.push(copyBoard(board));
+  }
+  move = 0;
+  board = copyBoard(positions[0]);
+  return true;
+}
+
+function draw() {
+  var container = document.getElementById('board-container');
+  var w = container.clientWidth - 20;
+  var h = container.clientHeight - 20;
+  var size = Math.min(w, h);
+  if (size < 100) size = 300;
+  
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  canvas.style.width = size + 'px';
+  canvas.style.height = size + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  
+  var cs = size / 20;
+  var m = cs;
+  
+  // Soft clay board
+  ctx.fillStyle = '#7d5c4a';
+  ctx.fillRect(0, 0, size, size);
+  
+  // Lines match background
+  ctx.strokeStyle = '#1a1210';
+  ctx.lineWidth = 1;
+  for (var i = 0; i < 19; i++) {
+    ctx.beginPath();
+    ctx.moveTo(m + i * cs, m);
+    ctx.lineTo(m + i * cs, m + 18 * cs);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(m, m + i * cs);
+    ctx.lineTo(m + 18 * cs, m + i * cs);
+    ctx.stroke();
+  }
+  
+  // Star points
+  ctx.fillStyle = '#1a1210';
+  var stars = [3, 9, 15];
+  for (var i = 0; i < 3; i++) {
+    for (var j = 0; j < 3; j++) {
+      ctx.beginPath();
+      ctx.arc(m + stars[i] * cs, m + stars[j] * cs, cs * 0.1, 0, 6.3);
+      ctx.fill();
+    }
+  }
+  
+  var lastMove = move > 0 ? moves[move - 1] : null;
+  
+  for (var y = 0; y < 19; y++) {
+    for (var x = 0; x < 19; x++) {
+      var stone = board[y][x];
+      if (stone) {
+        var cx = m + x * cs;
+        var cy = m + y * cs;
+        var r = cs * 0.45;
+        
+        // Subtle shadow
+        ctx.beginPath();
+        ctx.arc(cx + 1.5, cy + 1.5, r, 0, 6.3);
+        ctx.fillStyle = 'rgba(15,10,8,0.4)';
+        ctx.fill();
+        
+        // Deep burgundy or warm orange-cream
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, 6.3);
+        ctx.fillStyle = stone === 1 ? '#4a1e28' : '#e0a870';
+        ctx.fill();
+        
+        // Last move marker
+        if (lastMove && lastMove.x === x && lastMove.y === y) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, r * 0.3, 0, 6.3);
+          ctx.fillStyle = stone === 1 ? 'rgba(224,168,112,0.7)' : 'rgba(74,30,40,0.6)';
+          ctx.fill();
+        }
+      }
+    }
+  }
+  
+  document.getElementById('info').textContent = move + ' / ' + moves.length;
+}
+
+function next() {
+  if (move < moves.length) {
+    move++;
+    board = copyBoard(positions[move]);
+    draw();
+  }
+}
+
+function prev() {
+  if (move > 0) {
+    move--;
+    board = copyBoard(positions[move]);
+    draw();
+  }
+}
+
+document.getElementById('load-btn').onclick = function() {
+  var sgf = document.getElementById('sgf-input').value;
+  if (loadGame(sgf)) {
+    document.getElementById('input-screen').style.display = 'none';
+    document.getElementById('board-screen').style.display = 'block';
+    setTimeout(draw, 50);
+  }
+};
+
+document.getElementById('back').onclick = function() {
+  document.getElementById('board-screen').style.display = 'none';
+  document.getElementById('input-screen').style.display = 'flex';
+};
+
+canvas.onclick = function(e) {
+  var rect = canvas.getBoundingClientRect();
+  if (e.clientX - rect.left < rect.width / 2) prev();
+  else next();
+};
+
+var touchX = 0;
+canvas.ontouchstart = function(e) { touchX = e.touches[0].clientX; };
+canvas.ontouchend = function(e) {
+  var dx = e.changedTouches[0].clientX - touchX;
+  if (dx > 30) next();
+  else if (dx < -30) prev();
+};
+
+window.onresize = function() {
+  if (document.getElementById('board-screen').style.display === 'block') {
+    draw();
+  }
+};
+</script>
+</body>
+</html>
