@@ -46,6 +46,16 @@ canvas { max-width:100%; max-height:100%; }
 
 <div id="bot-screen">
   <h2>Play Bot</h2>
+  <div id="bot-selector" style="margin-bottom:15px;">
+    <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Opponent:</label>
+    <select id="bot-select" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
+      <option value="amybot-beginner">Amy Bot Beginner (~25k) - Basic</option>
+      <option value="amybot-ddk">Amy Bot DDK (~15k) - Solid</option>
+      <option value="amybot-sdk" selected>Amy Bot SDK (~5k) - Tactical</option>
+      <option value="leela-strong">Leela Zero (~5d) - Fighting</option>
+      <option value="kata-bot">KataGo (Strong) - Modern</option>
+    </select>
+  </div>
   <div id="board-size-selector" style="margin-bottom:15px;">
     <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Board Size:</label>
     <select id="board-size" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
@@ -57,9 +67,8 @@ canvas { max-width:100%; max-height:100%; }
   <div id="color-selector" style="margin-bottom:15px;">
     <label style="color:#a89080; font-size:14px; display:block; margin-bottom:5px;">Your Color:</label>
     <select id="player-color" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
-      <option value="automatic">Random</option>
-      <option value="black">Black (you go first)</option>
-      <option value="white">White (bot goes first)</option>
+      <option value="black">Black</option>
+      <option value="white">White</option>
     </select>
   </div>
   <button id="start-game-btn" onclick="startBotGame()">Start Game</button>
@@ -73,7 +82,7 @@ canvas { max-width:100%; max-height:100%; }
       <canvas id="canvas-bot" class="board-interactive"></canvas>
     </div>
     <div id="game-info" style="color:#a89080; margin-top:10px; text-align:center;"></div>
-    <button id="submit-move-btn" style="display:none; width:100%; max-width:300px; margin:15px auto 0; padding:16px; background:#c9a868; color:#1a1210; border:none; font-size:16px; border-radius:6px; cursor:pointer; font-weight:500; box-shadow:0 2px 8px rgba(201,168,104,0.3);" onclick="submitMove()">Place Stone</button>
+    <button id="submit-move-btn" style="display:none; width:100%; max-width:300px; margin:15px auto 0; padding:20px; background:#c9a868; color:#1a1210; border:none; font-size:16px; border-radius:8px; cursor:pointer; font-weight:500; box-shadow:0 2px 8px rgba(201,168,104,0.3);" onclick="submitMove()"></button>
   </div>
 </div>
 
@@ -89,7 +98,17 @@ canvas { max-width:100%; max-height:100%; }
 // ============================================================================
 
 const PROXY = 'http://localhost:5000';
-const BOT_ID = 605979; // amybot-beginner
+
+// Bot IDs and their characteristics
+const BOTS = {
+  'amybot-beginner': { id: 605979, name: 'Amy Bot Beginner', rank: '~25k', style: 'Basic' },
+  'amybot-ddk': { id: 431859, name: 'Amy Bot DDK', rank: '~15k', style: 'Solid' },
+  'amybot-sdk': { id: 424928, name: 'Amy Bot SDK', rank: '~5k', style: 'Tactical' },
+  'leela-strong': { id: 1591164, name: 'Leela Zero Strong', rank: '~5d', style: 'Fighting' },
+  'kata-bot': { id: 592684, name: 'KataGo', rank: 'Strong', style: 'Modern' }
+};
+
+const DEFAULT_BOT = 'amybot-sdk'; // Good for developing fighting skills
 
 var botGame = {
   socket: null,
@@ -206,7 +225,9 @@ async function startBotGame() {
 
 async function challengeBot() {
   try {
-    // Get selected board size and color
+    // Get selected bot, board size and color
+    const selectedBot = document.getElementById('bot-select').value;
+    const botId = BOTS[selectedBot].id;
     botGame.boardSize = parseInt(document.getElementById('board-size').value);
     const selectedColor = document.getElementById('player-color').value;
 
@@ -226,8 +247,8 @@ async function challengeBot() {
         time_control_parameters: {
           system: "fischer",
           time_increment: 30,
-          initial_time: 120,
-          max_time: 300
+          initial_time: 300,
+          max_time: 600
         }
       },
       challenger_color: selectedColor,
@@ -235,7 +256,7 @@ async function challengeBot() {
       max_ranking: 1000
     };
 
-    const result = await apiCall('/api/challenge/' + BOT_ID, 'POST', challenge);
+    const result = await apiCall('/api/challenge/' + botId, 'POST', challenge);
     botGame.gameId = result.game;
 
     setStatus('Game created! Waiting for bot...');
@@ -246,11 +267,21 @@ async function challengeBot() {
 
     // Determine our color
     console.log('Game data players:', gameData.players);
-    console.log('My player ID:', botGame.playerId);
-    if (gameData.players.black.id === botGame.playerId) {
+    console.log('My player ID:', botGame.playerId, 'type:', typeof botGame.playerId);
+
+    const blackId = gameData.players?.black?.id;
+    const whiteId = gameData.players?.white?.id;
+    console.log('Black ID:', blackId, 'type:', typeof blackId);
+    console.log('White ID:', whiteId, 'type:', typeof whiteId);
+
+    // Use == for loose comparison in case of type mismatch
+    if (blackId == botGame.playerId) {
       botGame.myColor = 'black';
-    } else {
+    } else if (whiteId == botGame.playerId) {
       botGame.myColor = 'white';
+    } else {
+      console.error('Could not determine player color! Player ID not found in game data');
+      botGame.myColor = 'black'; // Default fallback
     }
     console.log('My color determined:', botGame.myColor);
 
@@ -272,6 +303,7 @@ function handleGameEvent(event, data) {
     setStatus('Game started!');
     initBotBoard(data);
     document.getElementById('start-game-btn').style.display = 'none';
+    document.getElementById('bot-selector').style.display = 'none';
     document.getElementById('board-size-selector').style.display = 'none';
     document.getElementById('color-selector').style.display = 'none';
     document.getElementById('game-board').style.display = 'block';
@@ -299,9 +331,8 @@ function handleGameEvent(event, data) {
     // Switch turn
     botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
 
-    // Clear pending state and reset button
+    // Clear pending state
     botGame.pendingMove = false;
-    document.getElementById('submit-move-btn').textContent = 'Place Stone';
 
     drawBotBoard();
     updateTurnInfo();
@@ -316,6 +347,7 @@ function handleGameEvent(event, data) {
       setTimeout(() => {
         document.getElementById('game-board').style.display = 'none';
         document.getElementById('start-game-btn').style.display = 'block';
+        document.getElementById('bot-selector').style.display = 'block';
         document.getElementById('board-size-selector').style.display = 'block';
         document.getElementById('color-selector').style.display = 'block';
         setStatus('Ready to start a new game');
@@ -362,9 +394,17 @@ function initBotBoard(gameData) {
   }
 
   // Set current turn based on move count
+  // Black (1) always goes first, white (2) goes second
   const moveCount = gameData.moves?.length || 0;
   botGame.currentTurn = (moveCount % 2 === 0) ? 1 : 2;
+
   console.log(`Move count: ${moveCount}, current turn: ${botGame.currentTurn === 1 ? 'black' : 'white'}`);
+  console.log('initBotBoard complete:', {
+    boardSize: botGame.boardSize,
+    currentTurn: botGame.currentTurn,
+    myColor: botGame.myColor,
+    moveCount: moveCount
+  });
 }
 
 function updateTurnInfo() {
@@ -596,7 +636,6 @@ function submitMove() {
   // Mark as pending and hide button
   botGame.pendingMove = true;
   document.getElementById('submit-move-btn').style.display = 'none';
-  document.getElementById('submit-move-btn').textContent = 'Sending...';
 
   // Send move
   const moveStr = String.fromCharCode(97 + x) + String.fromCharCode(97 + y);
@@ -656,6 +695,7 @@ function resignGame() {
     setTimeout(() => {
       document.getElementById('game-board').style.display = 'none';
       document.getElementById('start-game-btn').style.display = 'block';
+      document.getElementById('bot-selector').style.display = 'block';
       document.getElementById('board-size-selector').style.display = 'block';
       document.getElementById('color-selector').style.display = 'block';
       setStatus('Ready to start a new game');
