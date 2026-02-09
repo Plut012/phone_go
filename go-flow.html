@@ -148,7 +148,8 @@ var botGame = {
   noise: null,        // Noise generator for landscape theme
   inkField: null,     // Ink diffusion field
   inkBuffer: null,    // Buffer for diffusion
-  gameSeed: null      // Seed for noise generation
+  gameSeed: null,     // Seed for noise generation
+  moveCount: 0        // Track number of moves processed to avoid duplicates
 };
 
 // ============================================================================
@@ -497,11 +498,28 @@ function handleGameEvent(event, data) {
     const moveArray = data.move || [];
     const [x, y, time] = moveArray;
 
-    console.log('Move received:', { x, y, time, currentTurn: botGame.currentTurn, myColor: botGame.myColor, data });
+    console.log('Move received:', {
+      x, y, time,
+      currentTurn: botGame.currentTurn,
+      myColor: botGame.myColor,
+      moveCount: botGame.moveCount,
+      data
+    });
 
     // Skip if board not initialized yet (wait for gamedata)
     if (!botGame.board) {
       console.log('Move received before board initialized, skipping');
+      return;
+    }
+
+    // Check if this is a new move by comparing with expected move count
+    // The move number from server is 0-indexed, our moveCount is the number of moves processed
+    const expectedMoveNumber = botGame.moveCount;
+    const actualMoveNumber = data.move_number;
+
+    // If we know the move number and it's not the next expected move, skip it (duplicate)
+    if (actualMoveNumber !== undefined && actualMoveNumber < expectedMoveNumber) {
+      console.log(`Skipping duplicate move ${actualMoveNumber}, already at ${expectedMoveNumber}`);
       return;
     }
 
@@ -520,6 +538,9 @@ function handleGameEvent(event, data) {
         diffuseInk();
       }
     }
+
+    // Increment move count
+    botGame.moveCount++;
 
     // Switch turn
     botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
@@ -604,6 +625,7 @@ function initBotBoard(gameData) {
   // Set current turn based on move count
   // Black (1) always goes first, white (2) goes second
   const moveCount = gameData.moves?.length || 0;
+  botGame.moveCount = moveCount;  // Track how many moves we've processed
   botGame.currentTurn = (moveCount % 2 === 0) ? 1 : 2;
 
   console.log(`Move count: ${moveCount}, current turn: ${botGame.currentTurn === 1 ? 'black' : 'white'}`);
@@ -611,7 +633,7 @@ function initBotBoard(gameData) {
     boardSize: botGame.boardSize,
     currentTurn: botGame.currentTurn,
     myColor: botGame.myColor,
-    moveCount: moveCount
+    moveCount: botGame.moveCount
   });
 }
 
@@ -1117,6 +1139,7 @@ function returnToMenu() {
   botGame.pendingMove = false;
   botGame.currentTurn = null;
   botGame.myColor = null;
+  botGame.moveCount = 0;  // Reset move counter
   botGame.theme = 'classic';
   botGame.noise = null;
   botGame.inkField = null;
