@@ -88,6 +88,8 @@ canvas { max-width:100%; max-height:100%; }
     <select id="board-theme" style="width:100%; padding:10px; background:#262018; border:1px solid #3d3028; color:#e8dcc4; font-size:14px; border-radius:4px;">
       <option value="classic">Classic Wood</option>
       <option value="landscape">Ink Landscape</option>
+      <option value="constellation">Constellation Map</option>
+      <option value="ember">Ember and Ash</option>
     </select>
   </div>
   <button id="start-game-btn" onclick="startBotGame()">Start Game</button>
@@ -404,26 +406,9 @@ async function challengeBot() {
     const gameData = await apiCall('/api/game/' + botGame.gameId);
     botGame.gameAuth = gameData.auth;
 
-    // Determine our color - use the top-level player_id fields
-    console.log('Game data:', {
-      black_player_id: gameData.black_player_id,
-      white_player_id: gameData.white_player_id,
-      myPlayerId: botGame.playerId
-    });
-
-    const blackId = gameData.black_player_id;
-    const whiteId = gameData.white_player_id;
-
-    // Use == for loose comparison in case of type mismatch
-    if (blackId == botGame.playerId) {
-      botGame.myColor = 'black';
-    } else if (whiteId == botGame.playerId) {
-      botGame.myColor = 'white';
-    } else {
-      console.error('Could not determine player color! Player ID not found in game data');
-      botGame.myColor = 'black'; // Default fallback
-    }
-    console.log('My color determined:', botGame.myColor);
+    // Don't determine color here - it's too early, player IDs are undefined
+    // Color will be determined from gamedata event after bot accepts
+    console.log('Game auth token obtained, waiting for gamedata to determine color...');
 
     // Connect to game
     botGame.socket.emit('game/connect', {
@@ -472,6 +457,7 @@ function handleGameEvent(event, data) {
     // Game finished with outcome
     if (gameData.phase === 'finished' && gameData.outcome) {
       const outcome = gameData.outcome;
+      console.log('Game finished! Outcome:', outcome, 'Type:', typeof outcome);
       let scoreText = 'Game Over';
 
       if (outcome === 'Resignation') {
@@ -482,6 +468,7 @@ function handleGameEvent(event, data) {
         // Parse score (format: "B+12.5" or "W+R")
         // Extract winner and margin
         const match = outcome.match(/^([BW])\+(.+)$/);
+        console.log('Regex match result:', match);
         if (match) {
           const winner = match[1]; // "B" or "W"
           const margin = match[2];  // "12.5" or "R" (resignation)
@@ -494,10 +481,15 @@ function handleGameEvent(event, data) {
             scoreText = `${winner} wins by ${margin}`;
           }
         } else {
-          scoreText = `Game Over\n${outcome}`;
+          // Fallback - show raw outcome if regex doesn't match
+          scoreText = `Game Over: ${outcome}`;
         }
+      } else {
+        // outcome is not a string - show it as-is
+        scoreText = `Game Over: ${JSON.stringify(outcome)}`;
       }
 
+      console.log('Final score text:', scoreText);
       setGameInfo(scoreText);
 
       // Show return button
@@ -619,10 +611,28 @@ function initBotBoard(gameData) {
     }
   }
 
-  // Store player IDs to determine colors
-  const blackPlayerId = gameData.players?.black?.id;
-  const whitePlayerId = gameData.players?.white?.id;
-  console.log('Players:', { black: blackPlayerId, white: whitePlayerId, myId: botGame.playerId, myColor: botGame.myColor });
+  // Determine player color from gamedata
+  // Try both formats: top-level black_player_id/white_player_id OR players.black.id/players.white.id
+  const blackPlayerId = gameData.black_player_id || gameData.players?.black?.id;
+  const whitePlayerId = gameData.white_player_id || gameData.players?.white?.id;
+
+  console.log('Determining color from gamedata:', {
+    blackPlayerId,
+    whitePlayerId,
+    myPlayerId: botGame.playerId
+  });
+
+  // Set myColor based on which ID matches
+  if (blackPlayerId == botGame.playerId) {
+    botGame.myColor = 'black';
+  } else if (whitePlayerId == botGame.playerId) {
+    botGame.myColor = 'white';
+  } else {
+    console.error('Could not determine color! Defaulting to black');
+    botGame.myColor = 'black';
+  }
+
+  console.log('✓ My color set to:', botGame.myColor);
 
   // Replay existing moves
   if (gameData.moves && gameData.moves.length > 0) {
@@ -675,6 +685,10 @@ function drawBotBoard() {
   console.log('drawBotBoard called, theme:', botGame.theme, 'noise:', !!botGame.noise, 'inkField:', !!botGame.inkField);
   if (botGame.theme === 'landscape') {
     drawBotBoardLandscape();
+  } else if (botGame.theme === 'constellation') {
+    drawBotBoardConstellation();
+  } else if (botGame.theme === 'ember') {
+    drawBotBoardEmber();
   } else {
     drawBotBoardClassic();
   }
@@ -990,6 +1004,382 @@ function renderLandscape(ctx, displaySize) {
   ctx.putImageData(imageData, 0, 0);
 }
 
+// Constellation theme rendering
+function drawBotBoardConstellation() {
+  const canvas = document.getElementById('canvas-bot');
+  const ctx = canvas.getContext('2d');
+  const container = document.getElementById('board-container-bot');
+
+  const boardSize = botGame.boardSize;
+  const displaySize = Math.min(container.clientWidth, container.clientHeight) - 20;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = displaySize * dpr;
+  canvas.height = displaySize * dpr;
+  canvas.style.width = displaySize + 'px';
+  canvas.style.height = displaySize + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const cs = displaySize / (boardSize + 1);
+  const m = cs;
+
+  // Deep indigo background with subtle starfield noise
+  const bgGradient = ctx.createRadialGradient(
+    displaySize / 2, displaySize / 2, 0,
+    displaySize / 2, displaySize / 2, displaySize * 0.7
+  );
+  bgGradient.addColorStop(0, '#1a1a2e');
+  bgGradient.addColorStop(1, '#0f0f1a');
+  ctx.fillStyle = bgGradient;
+  ctx.fillRect(0, 0, displaySize, displaySize);
+
+  // Add subtle starfield texture using noise
+  if (!botGame.noise) {
+    botGame.noise = new Noise(Date.now());
+  }
+  for (let i = 0; i < 150; i++) {
+    const x = Math.random() * displaySize;
+    const y = Math.random() * displaySize;
+    const noiseVal = botGame.noise.get(x * 0.05, y * 0.05);
+    if (noiseVal > 0.6) {
+      const brightness = (noiseVal - 0.6) * 2.5;
+      ctx.fillStyle = `rgba(200, 210, 255, ${brightness * 0.15})`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+  }
+
+  // Gentle tasteful grid lines
+  ctx.strokeStyle = 'rgba(100, 120, 160, 0.25)';
+  ctx.lineWidth = 0.8;
+  for (let i = 0; i < boardSize; i++) {
+    ctx.beginPath();
+    ctx.moveTo(m + i * cs, m);
+    ctx.lineTo(m + i * cs, m + (boardSize - 1) * cs);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(m, m + i * cs);
+    ctx.lineTo(m + (boardSize - 1) * cs, m + i * cs);
+    ctx.stroke();
+  }
+
+  // Star points (hoshi) - small subtle dots
+  const starPoints = boardSize === 19
+    ? [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]]
+    : boardSize === 13
+    ? [[3,3],[3,9],[6,6],[9,3],[9,9]]
+    : [[2,2],[2,6],[4,4],[6,2],[6,6]];
+
+  for (const [sx, sy] of starPoints) {
+    const cx = m + sx * cs;
+    const cy = m + sy * cs;
+
+    // Small dot only
+    ctx.fillStyle = 'rgba(160, 180, 220, 0.5)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Draw stones - abstract glowing orbs
+  for (let y = 0; y < boardSize; y++) {
+    for (let x = 0; x < boardSize; x++) {
+      const stone = botGame.board[y][x];
+      if (stone) {
+        const cx = m + x * cs;
+        const cy = m + y * cs;
+        const r = cs * 0.45;
+
+        if (stone === 1) {
+          // Black stone - higher contrast purple with subtle glow
+          // Subtle outer glow
+          const darkGlow = ctx.createRadialGradient(cx, cy, r * 0.3, cx, cy, r * 2.2);
+          darkGlow.addColorStop(0, 'rgba(60, 45, 85, 0.4)');
+          darkGlow.addColorStop(0.6, 'rgba(45, 35, 65, 0.2)');
+          darkGlow.addColorStop(1, 'rgba(30, 25, 50, 0)');
+          ctx.fillStyle = darkGlow;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r * 2.2, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Stone body - lighter purple for better contrast
+          const stoneGrad = ctx.createRadialGradient(
+            cx - r * 0.3, cy - r * 0.3, 0,
+            cx, cy, r
+          );
+          stoneGrad.addColorStop(0, '#5a4a6a');
+          stoneGrad.addColorStop(0.6, '#3d2f4d');
+          stoneGrad.addColorStop(1, '#2a1f38');
+          ctx.fillStyle = stoneGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // White stone - calm and muted with minimal glow
+          // Very subtle outer glow
+          const lightGlow = ctx.createRadialGradient(cx, cy, r * 0.5, cx, cy, r * 1.8);
+          lightGlow.addColorStop(0, 'rgba(190, 195, 210, 0.2)');
+          lightGlow.addColorStop(0.7, 'rgba(170, 180, 200, 0.1)');
+          lightGlow.addColorStop(1, 'rgba(160, 170, 190, 0)');
+          ctx.fillStyle = lightGlow;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r * 1.8, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Stone body - calm, soft colors
+          const stoneGrad = ctx.createRadialGradient(
+            cx - r * 0.3, cy - r * 0.3, 0,
+            cx, cy, r
+          );
+          stoneGrad.addColorStop(0, '#d8dce8');
+          stoneGrad.addColorStop(0.6, '#b8c0d0');
+          stoneGrad.addColorStop(1, '#98a0b8');
+          ctx.fillStyle = stoneGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+  }
+
+  // Draw preview move
+  if (botGame.previewMove) {
+    const px = botGame.previewMove.x;
+    const py = botGame.previewMove.y;
+    const cx = m + px * cs;
+    const cy = m + py * cs;
+    const r = cs * 0.45;
+
+    const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                   (botGame.currentTurn === 2 && botGame.myColor === 'white');
+    if (myTurn) {
+      if (botGame.currentTurn === 1) {
+        // Black preview - purple tint
+        const previewGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        previewGrad.addColorStop(0, 'rgba(90, 70, 106, 0.35)');
+        previewGrad.addColorStop(1, 'rgba(60, 45, 75, 0.15)');
+        ctx.fillStyle = previewGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // White preview - calm and subtle
+        const previewGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        previewGrad.addColorStop(0, 'rgba(216, 220, 232, 0.3)');
+        previewGrad.addColorStop(1, 'rgba(184, 192, 208, 0.15)');
+        ctx.fillStyle = previewGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+// Ember and Ash theme rendering
+function drawBotBoardEmber() {
+  const canvas = document.getElementById('canvas-bot');
+  const ctx = canvas.getContext('2d');
+  const container = document.getElementById('board-container-bot');
+
+  const boardSize = botGame.boardSize;
+  const displaySize = Math.min(container.clientWidth, container.clientHeight) - 20;
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = displaySize * dpr;
+  canvas.height = displaySize * dpr;
+  canvas.style.width = displaySize + 'px';
+  canvas.style.height = displaySize + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const cs = displaySize / (boardSize + 1);
+  const m = cs;
+
+  // Deep warm charcoal background
+  const bgGradient = ctx.createRadialGradient(
+    displaySize / 2, displaySize / 2, 0,
+    displaySize / 2, displaySize / 2, displaySize * 0.8
+  );
+  bgGradient.addColorStop(0, '#2e2620');
+  bgGradient.addColorStop(1, '#1a1410');
+  ctx.fillStyle = bgGradient;
+  ctx.fillRect(0, 0, displaySize, displaySize);
+
+  // Subtle warm charcoal texture
+  if (!botGame.noise) {
+    botGame.noise = new Noise(Date.now());
+  }
+
+  // Add organic charcoal texture
+  for (let py = 0; py < displaySize; py += 2) {
+    for (let px = 0; px < displaySize; px += 2) {
+      const nx = px / displaySize * 4;
+      const ny = py / displaySize * 4;
+      const noiseVal = botGame.noise.octaves(nx, ny, 3, 0.5);
+      const brightness = noiseVal * 0.5 + 0.5;
+
+      if (brightness > 0.55) {
+        const alpha = (brightness - 0.55) * 0.15;
+        ctx.fillStyle = `rgba(60, 45, 30, ${alpha})`;
+        ctx.fillRect(px, py, 2, 2);
+      } else if (brightness < 0.45) {
+        const alpha = (0.45 - brightness) * 0.1;
+        ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+        ctx.fillRect(px, py, 2, 2);
+      }
+    }
+  }
+
+  // Warm subtle grid lines
+  ctx.strokeStyle = 'rgba(80, 65, 50, 0.35)';
+  ctx.lineWidth = 0.8;
+  for (let i = 0; i < boardSize; i++) {
+    ctx.beginPath();
+    ctx.moveTo(m + i * cs, m);
+    ctx.lineTo(m + i * cs, m + (boardSize - 1) * cs);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(m, m + i * cs);
+    ctx.lineTo(m + (boardSize - 1) * cs, m + i * cs);
+    ctx.stroke();
+  }
+
+  // Star points - warm amber glow (localized)
+  const starPoints = boardSize === 19
+    ? [[3,3],[3,9],[3,15],[9,3],[9,9],[9,15],[15,3],[15,9],[15,15]]
+    : boardSize === 13
+    ? [[3,3],[3,9],[6,6],[9,3],[9,9]]
+    : [[2,2],[2,6],[4,4],[6,2],[6,6]];
+
+  for (const [sx, sy] of starPoints) {
+    const cx = m + sx * cs;
+    const cy = m + sy * cs;
+
+    // Warm amber glow - localized
+    const glowGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, cs * 0.35);
+    glowGrad.addColorStop(0, 'rgba(220, 140, 70, 0.35)');
+    glowGrad.addColorStop(0.6, 'rgba(200, 110, 50, 0.15)');
+    glowGrad.addColorStop(1, 'rgba(180, 90, 40, 0)');
+    ctx.fillStyle = glowGrad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, cs * 0.35, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Hot coal center
+    ctx.fillStyle = 'rgba(230, 150, 80, 0.6)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Draw stones - matte and organic
+  for (let y = 0; y < boardSize; y++) {
+    for (let x = 0; x < boardSize; x++) {
+      const stone = botGame.board[y][x];
+      if (stone) {
+        const cx = m + x * cs;
+        const cy = m + y * cs;
+        const r = cs * 0.45;
+
+        if (stone === 1) {
+          // Charcoal stone - deep matte grey
+          // Very subtle shadow
+          ctx.beginPath();
+          ctx.arc(cx + 1, cy + 1.5, r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+          ctx.fill();
+
+          // Matte charcoal body
+          const stoneGrad = ctx.createRadialGradient(
+            cx - r * 0.25, cy - r * 0.25, 0,
+            cx, cy, r
+          );
+          stoneGrad.addColorStop(0, '#4a423a');
+          stoneGrad.addColorStop(0.6, '#342e28');
+          stoneGrad.addColorStop(1, '#242018');
+          ctx.fillStyle = stoneGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Add subtle charcoal texture
+          for (let i = 0; i < 8; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = Math.random() * r * 0.6;
+            const tx = cx + Math.cos(angle) * dist;
+            const ty = cy + Math.sin(angle) * dist;
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+            ctx.fillRect(tx, ty, 1, 1);
+          }
+        } else {
+          // Ash stone - pale matte grey/cream
+          // Very subtle shadow
+          ctx.beginPath();
+          ctx.arc(cx + 1, cy + 1.5, r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+          ctx.fill();
+
+          // Matte ash body
+          const stoneGrad = ctx.createRadialGradient(
+            cx - r * 0.25, cy - r * 0.25, 0,
+            cx, cy, r
+          );
+          stoneGrad.addColorStop(0, '#dcd4cc');
+          stoneGrad.addColorStop(0.6, '#c8c0b8');
+          stoneGrad.addColorStop(1, '#b0a8a0');
+          ctx.fillStyle = stoneGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Add subtle ash texture
+          for (let i = 0; i < 6; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = Math.random() * r * 0.5;
+            const tx = cx + Math.cos(angle) * dist;
+            const ty = cy + Math.sin(angle) * dist;
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.fillRect(tx, ty, 1, 1);
+          }
+        }
+      }
+    }
+  }
+
+  // Draw preview move
+  if (botGame.previewMove) {
+    const px = botGame.previewMove.x;
+    const py = botGame.previewMove.y;
+    const cx = m + px * cs;
+    const cy = m + py * cs;
+    const r = cs * 0.45;
+
+    const myTurn = (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                   (botGame.currentTurn === 2 && botGame.myColor === 'white');
+    if (myTurn) {
+      if (botGame.currentTurn === 1) {
+        // Charcoal preview
+        const previewGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        previewGrad.addColorStop(0, 'rgba(74, 66, 58, 0.4)');
+        previewGrad.addColorStop(1, 'rgba(52, 46, 40, 0.2)');
+        ctx.fillStyle = previewGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Ash preview
+        const previewGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        previewGrad.addColorStop(0, 'rgba(220, 212, 204, 0.4)');
+        previewGrad.addColorStop(1, 'rgba(200, 192, 184, 0.2)');
+        ctx.fillStyle = previewGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
 function removeCapturesBot(x, y, color) {
   const opp = color === 1 ? 2 : 1;
   const dirs = [[0,1],[0,-1],[1,0],[-1,0]];
@@ -1108,6 +1498,17 @@ function submitMove() {
   botGame.previewMove = null;
   drawBotBoard();
 }
+
+// Keyboard support - Enter key submits move
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    // Only submit if there's a preview move and we're in a game
+    if (botGame.previewMove && botGame.gameId && botGame.phase === 'play' && !botGame.pendingMove) {
+      e.preventDefault(); // Prevent any default behavior
+      submitMove();
+    }
+  }
+});
 
 function passMove() {
   if (!botGame.gameId || botGame.phase !== 'play') return;
