@@ -404,14 +404,15 @@ async function challengeBot() {
     const gameData = await apiCall('/api/game/' + botGame.gameId);
     botGame.gameAuth = gameData.auth;
 
-    // Determine our color
-    console.log('Game data players:', gameData.players);
-    console.log('My player ID:', botGame.playerId, 'type:', typeof botGame.playerId);
+    // Determine our color - use the top-level player_id fields
+    console.log('Game data:', {
+      black_player_id: gameData.black_player_id,
+      white_player_id: gameData.white_player_id,
+      myPlayerId: botGame.playerId
+    });
 
-    const blackId = gameData.players?.black?.id;
-    const whiteId = gameData.players?.white?.id;
-    console.log('Black ID:', blackId, 'type:', typeof blackId);
-    console.log('White ID:', whiteId, 'type:', typeof whiteId);
+    const blackId = gameData.black_player_id;
+    const whiteId = gameData.white_player_id;
 
     // Use == for loose comparison in case of type mismatch
     if (blackId == botGame.playerId) {
@@ -443,6 +444,10 @@ function handleGameEvent(event, data) {
 
     // Initial game setup
     if (gameData.phase === 'play' && !botGame.board) {
+      console.log('=== GAMEDATA RECEIVED (Initial) ===');
+      console.log('Moves in gamedata:', gameData.moves?.length || 0);
+      console.log('Players:', gameData.players);
+
       setStatus('Game started!');
       initBotBoard(gameData);
       document.getElementById('start-game-btn').style.display = 'none';
@@ -453,6 +458,15 @@ function handleGameEvent(event, data) {
       document.getElementById('game-board').style.display = 'block';
       drawBotBoard();
       updateTurnInfo();
+
+      console.log('=== BOARD INITIALIZED ===');
+      console.log('State:', {
+        myColor: botGame.myColor,
+        currentTurn: botGame.currentTurn,
+        moveCount: botGame.moveCount,
+        isMyTurn: (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                  (botGame.currentTurn === 2 && botGame.myColor === 'white')
+      });
     }
 
     // Game finished with outcome
@@ -498,30 +512,35 @@ function handleGameEvent(event, data) {
     const moveArray = data.move || [];
     const [x, y, time] = moveArray;
 
-    console.log('Move received:', {
-      x, y, time,
+    console.log('=== MOVE EVENT ===');
+    console.log('Move data:', { x, y, time, move_number: data.move_number });
+    console.log('Game state:', {
       currentTurn: botGame.currentTurn,
       myColor: botGame.myColor,
       moveCount: botGame.moveCount,
-      data
+      boardInitialized: !!botGame.board
     });
 
     // Skip if board not initialized yet (wait for gamedata)
     if (!botGame.board) {
-      console.log('Move received before board initialized, skipping');
+      console.log('❌ Board not initialized, skipping move');
       return;
     }
 
-    // Check if this is a new move by comparing with expected move count
-    // The move number from server is 0-indexed, our moveCount is the number of moves processed
-    const expectedMoveNumber = botGame.moveCount;
+    // Check if this position already has a stone (duplicate move from gamedata replay)
+    if (x >= 0 && y >= 0 && botGame.board[y] && botGame.board[y][x] !== 0) {
+      console.log(`❌ Position (${x},${y}) already occupied, skipping duplicate move`);
+      return;
+    }
+
+    // Check move number if available
     const actualMoveNumber = data.move_number;
-
-    // If we know the move number and it's not the next expected move, skip it (duplicate)
-    if (actualMoveNumber !== undefined && actualMoveNumber < expectedMoveNumber) {
-      console.log(`Skipping duplicate move ${actualMoveNumber}, already at ${expectedMoveNumber}`);
+    if (actualMoveNumber !== undefined && actualMoveNumber < botGame.moveCount) {
+      console.log(`❌ Duplicate move number ${actualMoveNumber} < ${botGame.moveCount}, skipping`);
       return;
     }
+
+    console.log('✓ Processing new move');
 
     // Process move (pass if x,y are negative)
     if (x >= 0 && y >= 0 && botGame.board[y] && botGame.board[y][x] !== undefined) {
@@ -544,6 +563,13 @@ function handleGameEvent(event, data) {
 
     // Switch turn
     botGame.currentTurn = botGame.currentTurn === 1 ? 2 : 1;
+
+    console.log('After move:', {
+      moveCount: botGame.moveCount,
+      currentTurn: botGame.currentTurn,
+      isMyTurn: (botGame.currentTurn === 1 && botGame.myColor === 'black') ||
+                (botGame.currentTurn === 2 && botGame.myColor === 'white')
+    });
 
     // Clear pending state
     botGame.pendingMove = false;

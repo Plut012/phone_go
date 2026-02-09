@@ -78,7 +78,13 @@ def auto_login():
 @app.route('/')
 def serve_html():
     """Serve the go-flow.html file"""
-    return send_file('go-flow.html')
+    from flask import make_response
+    response = make_response(send_file('go-flow.html'))
+    # Disable caching for development
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.route('/manifest.json')
 def serve_manifest():
